@@ -28,7 +28,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="1.0"
-                android:id="@+id/rate10"/>
+                android:id="@+id/rate10"
+                android:checked="true"/>
 
         <RadioButton
                 android:layout_width="wrap_content"
@@ -56,7 +57,7 @@
             android:text="Play with JLayer"
             android:id="@+id/playJLayer"
             android:layout_below="@+id/state"
-            android:layout_alignParentLeft="true"
+            android:layout_alignParentLeft="false"
             android:layout_alignParentStart="true"/>
 
     <Button
@@ -64,16 +65,17 @@
             android:layout_height="wrap_content"
             android:text="Play with MPG123"
             android:id="@+id/playMPG123"
-            android:layout_alignTop="@+id/playJLayer"
-            android:layout_toRightOf="@+id/playJLayer"/>
+            android:layout_below="@+id/playJLayer"
+            android:layout_alignParentLeft="false"
+            android:layout_alignParentStart="true"/>
 
     <Button
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Pause"
             android:id="@+id/pause"
-            android:layout_below="@+id/playJLayer"
-            android:layout_alignParentLeft="true"
+            android:layout_below="@+id/playVorbis"
+            android:layout_alignParentLeft="false"
             android:layout_alignParentStart="true"/>
 
     <CheckBox
@@ -82,7 +84,14 @@
             android:text="Timing Only"
             android:id="@+id/timing"
             android:layout_below="@+id/pause"
-            android:layout_alignParentLeft="true"
+            android:layout_alignParentLeft="false"
             android:layout_alignParentStart="true"/>
+
+    <Button
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Play with Vorbis"
+            android:id="@+id/playVorbis"
+            android:layout_below="@+id/playMPG123"/>
 
 </RelativeLayout>

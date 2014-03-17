@@ -8,7 +8,11 @@ typedef struct _MP3File
 	mpg123_handle* handle;
 	int channels;
 	long rate;
-	long length;
+	long num_samples;
+	int samples_per_frame;
+	double secs_per_frame;
+	long num_frames;
+	float duration;
 	size_t buffer_size;
 	unsigned char* buffer;
 	size_t leftSamples;
@@ -29,14 +33,14 @@ void mp3file_delete(MP3File *mp3file) {
 	free(mp3file);
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_jlayerplayer_MPG123_init
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_init
 	(JNIEnv *env, jclass c)
 {
 	return mpg123_init();
 }
 
 /*
-JNIEXPORT jlong JNICALL Java_com_axelby_jlayerplayer_MPG123_new
+JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_MPG123_new
 	(JNIEnv *env, jclass c)
 {
 	int err;
@@ -44,13 +48,13 @@ JNIEXPORT jlong JNICALL Java_com_axelby_jlayerplayer_MPG123_new
 }
 */
 
-JNIEXPORT jstring JNICALL Java_com_axelby_jlayerplayer_MPG123_getErrorMessage
+JNIEXPORT jstring JNICALL Java_com_axelby_mp3decoders_MPG123_getErrorMessage
 	(JNIEnv *env, jclass c, jint error)
 {
 	return (*env)->NewStringUTF(env, mpg123_plain_strerror(error));
 }
 
-JNIEXPORT jlong JNICALL Java_com_axelby_jlayerplayer_MPG123_openFile
+JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_MPG123_openFile
 	(JNIEnv *env, jclass c, jstring filename)
 {
     int err = MPG123_OK;
@@ -81,11 +85,19 @@ JNIEXPORT jlong JNICALL Java_com_axelby_jlayerplayer_MPG123_openFile
                     mp3->buffer_size = mpg123_outblock(mh);
                     mp3->buffer = (unsigned char*)malloc(mp3->buffer_size);
 
-                    long length = mpg123_length(mh);
-                    if (length == MPG123_ERR)
-                        mp3->length = 0;
+                    mp3->num_samples = mpg123_length(mh);
+					mp3->samples_per_frame = mpg123_spf(mh);
+					mp3->secs_per_frame = mpg123_tpf(mh);
+
+                    if (mp3->num_samples == MPG123_ERR || mp3->samples_per_frame < 0)
+                        mp3->num_frames = 0;
                     else
-                        mp3->length = length;
+                        mp3->num_frames = mp3->num_samples / mp3->samples_per_frame;
+
+					if (mp3->num_samples == MPG123_ERR || mp3->samples_per_frame < 0 || mp3->secs_per_frame < 0)
+						mp3->duration = 0;
+					else
+						mp3->duration = mp3->num_samples / mp3->samples_per_frame * mp3->secs_per_frame;
 
                     return (jlong)mp3;
                 }
@@ -93,12 +105,12 @@ JNIEXPORT jlong JNICALL Java_com_axelby_jlayerplayer_MPG123_openFile
         }
         mp3file_delete(mp3);
     } else {
-		__android_log_write(ANDROID_LOG_INFO, "jlayerplayer-jni", mpg123_plain_strerror(err));
+		__android_log_write(ANDROID_LOG_INFO, "mp3decoders-jni", mpg123_plain_strerror(err));
 	}
     return 0;
 }
 
-JNIEXPORT void JNICALL Java_com_axelby_jlayerplayer_MPG123_delete
+JNIEXPORT void JNICALL Java_com_axelby_mp3decoders_MPG123_delete
 	(JNIEnv *env, jclass c, jlong handle)
 {
 	MP3File *mp3 = (MP3File*)handle;
@@ -116,7 +128,7 @@ static inline int readBuffer(MP3File* mp3)
     return err != MPG123_OK ? 0 : done;
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_jlayerplayer_MPG123_readSamples
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_readSamples
 	(JNIEnv *env, jclass c, jlong handle, jshortArray obj_buffer, jint offset, jint numSamples)
 {
     MP3File *mp3 = (MP3File *)handle;
@@ -148,7 +160,7 @@ JNIEXPORT jint JNICALL Java_com_axelby_jlayerplayer_MPG123_readSamples
     return idx > numSamples ? 0 : idx;
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_jlayerplayer_MPG123_skipSamples
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_skipSamples
 	(JNIEnv *env, jclass c, jlong handle, jint numSamples)
 {
     MP3File *mp3 = (MP3File *)handle;
@@ -168,63 +180,63 @@ JNIEXPORT jint JNICALL Java_com_axelby_jlayerplayer_MPG123_skipSamples
     return idx > numSamples ? 0 : idx;
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_jlayerplayer_MPG123_seek
-	(JNIEnv *env, jclass c, jlong handle, jlong sampleOffset)
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_seek
+	(JNIEnv *env, jclass c, jlong handle, jfloat seconds)
 {
     MP3File *mp3 = (MP3File *)handle;
-    return mpg123_seek(mp3->handle, sampleOffset, SEEK_SET);
+    return mpg123_seek(mp3->handle, (int) seconds / mp3->secs_per_frame * mp3->samples_per_frame, SEEK_SET);
 }
 
-JNIEXPORT jdouble JNICALL Java_com_axelby_jlayerplayer_MPG123_getSecondsPerFrame
+JNIEXPORT float JNICALL Java_com_axelby_mp3decoders_MPG123_getPosition
 	(JNIEnv *env, jclass c, jlong handle)
 {
     MP3File *mp3 = (MP3File *)handle;
-    return mpg123_tpf(mp3->handle);
+    return mpg123_tellframe(mp3->handle) * mp3->secs_per_frame;
 }
 
-JNIEXPORT jlong JNICALL Java_com_axelby_jlayerplayer_MPG123_getPositionInFrames
-	(JNIEnv *env, jclass c, jlong handle)
-{
-    MP3File *mp3 = (MP3File *)handle;
-    return mpg123_tellframe(mp3->handle);
-}
-
-JNIEXPORT jlong JNICALL Java_com_axelby_jlayerplayer_MPG123_getPosition
-	(JNIEnv *env, jclass c, jlong handle)
-{
-    MP3File *mp3 = (MP3File *)handle;
-    return mpg123_tell(mp3->handle);
-}
-
-JNIEXPORT jint JNICALL Java_com_axelby_jlayerplayer_MPG123_getNumChannels
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_getNumChannels
 	(JNIEnv *env, jclass c, jlong handle)
 {
     MP3File *mp3 = (MP3File *)handle;
     return mp3->channels;
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_jlayerplayer_MPG123_getRate
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_getRate
 	(JNIEnv *env, jclass c, jlong handle)
 {
     MP3File *mp3 = (MP3File *)handle;
     return mp3->rate;
 }
 
-JNIEXPORT jlong JNICALL Java_com_axelby_jlayerplayer_MPG123_getLength
+JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_MPG123_getNumFrames
 	(JNIEnv *env, jclass c, jlong handle)
 {
     MP3File *mp3 = (MP3File *)handle;
-    return mp3->length;
+    return mp3->num_frames;
 }
 
-JNIEXPORT jlong JNICALL Java_com_axelby_jlayerplayer_MPG123_getOutputBlockSize
+JNIEXPORT jfloat JNICALL Java_com_axelby_mp3decoders_MPG123_getDuration
+	(JNIEnv *env, jclass c, jlong handle)
+{
+    MP3File *mp3 = (MP3File *)handle;
+    return mp3->duration;
+}
+
+JNIEXPORT jdouble JNICALL Java_com_axelby_mp3decoders_MPG123_getSecondsPerFrame
+	(JNIEnv *env, jclass c, jlong handle)
+{
+    MP3File *mp3 = (MP3File *)handle;
+    return mp3->secs_per_frame;
+}
+
+JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_MPG123_getOutputBlockSize
 	(JNIEnv *env, jclass c, jlong handle)
 {
     MP3File *mp3 = (MP3File *)handle;
 	return mpg123_outblock(mp3->handle);
 }
 
-JNIEXPORT jintArray JNICALL Java_com_axelby_jlayerplayer_MPG123_getSupportedRates
+JNIEXPORT jintArray JNICALL Java_com_axelby_mp3decoders_MPG123_getSupportedRates
 	(JNIEnv *env, jclass c)
 {
 	const long *list;
