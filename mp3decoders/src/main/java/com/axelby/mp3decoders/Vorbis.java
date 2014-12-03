@@ -7,7 +7,7 @@ public class Vorbis implements IMediaDecoder {
 
 	private static native long openFile(String filename);
 	private static native void delete(long handle);
-	private static native int readSamples(long handle, short[] buffer, int offset, int numSamples);
+	private static native int readSamples(long handle, short[] buffer);
 	private static native int skipSamples(long handle, int numSamples);
 	private static native int isSeekable(long handle);
 	private static native int seek(long handle, float offset);
@@ -15,9 +15,6 @@ public class Vorbis implements IMediaDecoder {
 	private static native int getNumChannels(long handle);
 	private static native int getRate(long handle);
 	private static native float getDuration(long handle);
-	private static native long getRawLength(long handle);
-	private static native long getPCMLength(long handle);
-	private static native long getTimeLength(long handle);
 
 	long _handle = 0;
 	public Vorbis(String filename) {
@@ -31,8 +28,8 @@ public class Vorbis implements IMediaDecoder {
 	}
 
 	@Override
-	public int readSamples(short[] buffer, int offset, int numSamples) {
-		return Vorbis.readSamples(_handle, buffer, offset, numSamples);
+	public int readSamples(short[] buffer) {
+		return Vorbis.readSamples(_handle, buffer);
 	}
 	public int skipSamples(int numSamples) { return Vorbis.skipSamples(_handle, numSamples); }
 	public boolean isSeekable() { return Vorbis.isSeekable(_handle) != 0; }

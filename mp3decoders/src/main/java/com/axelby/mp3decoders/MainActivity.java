@@ -8,8 +8,6 @@ import android.media.AudioTrack;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
-import android.widget.CheckBox;
-import android.widget.RadioGroup;
 import android.widget.TextView;
 
 import java.io.File;
@@ -17,200 +15,249 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-
-import javazoom.jl.decoder.Bitstream;
-import javazoom.jl.decoder.BitstreamException;
-import javazoom.jl.decoder.Decoder;
-import javazoom.jl.decoder.DecoderException;
-import javazoom.jl.decoder.Header;
-import javazoom.jl.decoder.SampleBuffer;
+import java.io.RandomAccessFile;
 
 public class MainActivity extends Activity {
 	private TextView _stateText;
 	private AudioTrack _track = null;
 	IMediaDecoder _decoder;
+	MPG123Stream _streamer;
 
 	private Runnable vorbisRunnable = new Runnable() {
 		@Override
 		public void run() {
-			Vorbis vorbis = new Vorbis(getFilesDir() + "/loop1_ogg.ogg");
-			_decoder = vorbis;
-
-			_track = new AudioTrack(AudioManager.STREAM_MUSIC,
-					vorbis.getRate(),
-					vorbis.getNumChannels() == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO,
-					AudioFormat.ENCODING_PCM_16BIT,
-					vorbis.getRate() * 2,
-					AudioTrack.MODE_STREAM);
-			_track.setPositionNotificationPeriod(vorbis.getRate());
-			RadioGroup rg = (RadioGroup) findViewById(R.id.playbackRate);
-			switch (rg.getCheckedRadioButtonId()) {
-				case R.id.rate15:
-					_track.setPlaybackRate((int) (vorbis.getRate() * 1.5));
-					break;
-				case R.id.rate20:
-					_track.setPlaybackRate((int) (vorbis.getRate() * 2.0));
-					break;
-			}
-			_track.setPlaybackPositionUpdateListener(playbackPositionListener);
-
-
-			_track.play();
-			changeState("playing");
-
-			try {
-				int total = 0;
-				long start = System.currentTimeMillis();
-				short[] pcm = new short[1024 * 5];
-				while (vorbis.readSamples(pcm, 0, pcm.length) > 0) {
-					total += pcm.length;
-					if (_track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
-						Thread.sleep(50);
-						continue;
-					}
-					if (!isTimingOnly()) {
-						_track.write(pcm, 0, pcm.length);
-						//Log.i("mp3decoders", "wrote " + (pcm.length / 2) + " frames");
-					}
-				}
-				long end = System.currentTimeMillis();
-				Log.i("mp3decoders", "vorbis decoded " + total + " frames in " + (end - start) + " milliseconds");
-
-			} catch (InterruptedException e) {
-				Log.e("mp3decoders", "InterruptedException", e);
-			} finally {
-				vorbis.close();
-				waitAndCloseTrack();
-			}
-
-			Log.i("mp3decoders", "done loading audiotrack");
-			changeState("finished playing");
+			playFromDecoder(new Vorbis(getFilesDir() + "/loop1_ogg.ogg"));
 		}
 	};
 
 	private Runnable mpg123Runnable = new Runnable() {
 		@Override
 		public void run() {
-			MPG123 mpg123 = new MPG123(getFilesDir() + "/loop1.mp3");
-			_decoder = mpg123;
+			playFromDecoder(new MPG123(getFilesDir() + "/loop1.mp3"));
+		}
+	};
 
-			_track = new AudioTrack(AudioManager.STREAM_MUSIC,
-					mpg123.getRate(),
-					mpg123.getNumChannels() == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO,
-					AudioFormat.ENCODING_PCM_16BIT,
-					mpg123.getRate() * 2,
-					AudioTrack.MODE_STREAM);
-			_track.setPositionNotificationPeriod(mpg123.getRate());
-			RadioGroup rg = (RadioGroup) findViewById(R.id.playbackRate);
-			switch (rg.getCheckedRadioButtonId()) {
-				case R.id.rate15:
-					_track.setPlaybackRate((int) (mpg123.getRate() * 1.5));
-					break;
-				case R.id.rate20:
-					_track.setPlaybackRate((int) (mpg123.getRate() * 2.0));
-					break;
+	private Runnable mpg123StreamRunnable = new Runnable() {
+		@Override
+		public void run() {
+			playStream(new MPG123Stream(), getFilesDir() + "/loop1.mp3");
+		}
+	};
+
+	private double hannWindow(float n, float N) {
+		return 0.5 * (1 - Math.cos(2 * Math.PI * n / (N-1)));
+	}
+	private int olaIndex(int index, int windowSize, int overlap) {
+		int overlapnum = index / (windowSize + overlap);
+		int extra = index - overlapnum * (windowSize + overlap);
+
+		// is it in the beginning section
+		int base = overlapnum * windowSize;
+		if (extra < windowSize - overlap)
+			return base + extra;
+		// it is in the overlap
+		int compressedoffset = extra - (windowSize - overlap);
+		return base + compressedoffset / 2;
+	}
+
+	/*
+	0       80   100   120        200   220   240          320
+	|--------|-----|-----|----------|-----|-----|------------|
+	|========|===========|==========|===========|============|
+	0       80         100        180         200          280
+	*/
+
+	private void playFromDecoder(IMediaDecoder decoder) {
+		_decoder = decoder;
+		int rate = _decoder.getRate();
+		int numChannels = _decoder.getNumChannels();
+		_track = new AudioTrack(AudioManager.STREAM_MUSIC,
+				rate,
+				numChannels == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO,
+				AudioFormat.ENCODING_PCM_16BIT,
+				rate * 2,
+				AudioTrack.MODE_STREAM);
+		_track.setPositionNotificationPeriod(rate);
+		_track.setPlaybackPositionUpdateListener(playbackPositionListener);
+		_track.play();
+		changeState("playing");
+
+		try {
+			int total = 0;
+			long start = System.currentTimeMillis();
+			int samples;
+			short[] pcm = new short[1000 * 5];
+			while ((samples = _decoder.readSamples(pcm)) > 0) {
+				if (_track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
+					Thread.sleep(50);
+					continue;
+				}
+				_track.write(pcm, 0, samples);
 			}
+			long end = System.currentTimeMillis();
+			Log.i("mp3decoders", "decoded " + total + " frames in " + (end - start) + " milliseconds");
+		} catch (InterruptedException e) {
+			Log.e("mp3decoders", "InterruptedException", e);
+		} finally {
+			_decoder.close();
+			waitAndCloseTrack();
+		}
+
+		Log.i("mp3decoders", "done loading audiotrack");
+		changeState("finished playing");
+	}
+
+	private void playStream(IMediaDecoder decoder, String filename) {
+		_decoder = _streamer = (MPG123Stream) decoder;
+
+		Piper piper = null;
+		int rate = 0;
+		int numChannels = 0;
+
+		try {
+			piper = new Piper(filename);
+			piper.start();
+
+			// find rate and numchannels - feed until there's enough data for it
+			rate = _decoder.getRate();
+			numChannels = _decoder.getNumChannels();
+			while (rate == 0) {
+				Thread.sleep(50);
+				rate = _decoder.getRate();
+				numChannels = _decoder.getNumChannels();
+			}
+
+			// create track
+			_track = new AudioTrack(AudioManager.STREAM_MUSIC,
+					rate,
+					numChannels == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO,
+					AudioFormat.ENCODING_PCM_16BIT,
+					rate * 2,
+					AudioTrack.MODE_STREAM);
+			_track.setPositionNotificationPeriod(_decoder.getRate());
 			_track.setPlaybackPositionUpdateListener(playbackPositionListener);
-
-
 			_track.play();
 			changeState("playing");
 
-			try {
-				int total = 0;
-				long start = System.currentTimeMillis();
-				short[] pcm = new short[1024 * 5];
-				while (mpg123.readSamples(pcm, 0, pcm.length) > 0) {
-					total += pcm.length;
-					if (_track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
-						Thread.sleep(50);
-						continue;
-					}
-					if (!isTimingOnly()) {
-						_track.write(pcm, 0, pcm.length);
-						//Log.i("mp3decoders", "wrote " + (pcm.length / 2) + " frames");
-					}
+			short[] pcm = new short[1000 * 5];
+			while (true) {
+				if (_track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
+					Thread.sleep(50);
+					continue;
 				}
-				long end = System.currentTimeMillis();
-				Log.i("mp3decoders", "mpg123 decoded " + total + " frames in " + (end - start) + " milliseconds");
 
-			} catch (InterruptedException e) {
-				Log.e("mp3decoders", "InterruptedException", e);
-			} finally {
-				mpg123.close();
-				waitAndCloseTrack();
+				int samples = _decoder.readSamples(pcm);
+				if (samples == -1) {
+					Thread.sleep(50);
+					continue;
+				}
+				if (samples == 0)
+					break;
+				if (samples > 0) {
+					_track.write(pcm, 0, samples);
+
+					if (_decoder.getPosition() > 6f)
+						streamSeekTo(piper, rate, numChannels, 1f);
+				}
 			}
-
-			Log.i("mp3decoders", "done loading audiotrack");
-			changeState("finished playing");
+		} catch (InterruptedException e) {
+			Log.e("mp3decoders", "InterruptedException", e);
+		} catch (IOException e) {
+			Log.e("mp3decoders", "IOException", e);
+		} finally {
+			if (piper != null)
+				piper.release();
+			_decoder.close();
+			waitAndCloseTrack();
 		}
-	};
 
-	private Runnable jLayerRunnable = new Runnable() {
-		@Override
-		public void run() {
-			InputStream loop1 = null;
+		Log.i("mp3decoders", "done loading audiotrack");
+		changeState("finished playing");
+	}
+
+	// trash the current track, seek, wait until seeking is done, then recreate the track
+	private void streamSeekTo(Piper piper, int rate, int numChannels, float seekToSeconds) throws InterruptedException {
+		_track.pause();
+		_track.flush();
+		_track.release();
+		_track = null;
+
+		_decoder = _streamer = new MPG123Stream();
+
+		int offset = _streamer.seekFrameOffset(seekToSeconds);
+		piper.seekTo(offset);
+		while (!piper.doneSeeking())
+			Thread.sleep(50);
+
+		_track = new AudioTrack(AudioManager.STREAM_MUSIC,
+				rate,
+				numChannels == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO,
+				AudioFormat.ENCODING_PCM_16BIT,
+				rate * 2,
+				AudioTrack.MODE_STREAM);
+		_track.setPositionNotificationPeriod(rate);
+		_track.setPlaybackPositionUpdateListener(playbackPositionListener);
+		_track.play();
+	}
+
+	// pipes data from a file to the parent class's stream
+	public class Piper {
+		Thread _streamerThread = null;
+		RandomAccessFile _file = null;
+		long _seekToOffset = -1;
+		long _furthestRead = 0; // the number of bytes we've "downloaded"
+
+		public Piper(String filename) throws FileNotFoundException {
+			_file = new RandomAccessFile(filename, "r");
+			_streamerThread = new Thread(_streamerRunnable, "streamer");
+		}
+		public void start() { _streamerThread.start(); }
+		public void release() {
 			try {
-				Log.i("mp3decoders", "in loader thread");
+				_file.close();
+			} catch (IOException ignored) { }
+		}
+		public void seekTo(long offset) {
+			_seekToOffset = offset;
+			if (!_streamerThread.isAlive()) {
+				_streamerThread = new Thread(_streamerRunnable, "streamer");
+				_streamerThread.start();
+			}
+		}
+		public boolean doneSeeking() { return _seekToOffset == -1; }
 
-				loop1 = getResources().openRawResource(R.raw.loop1);
-				Decoder decoder = new Decoder();
-				Bitstream bitstream = new Bitstream(loop1);
-
-				Header header = bitstream.readFrame();
-				_track = createTrackFromHeader(header);
-				_track.play();
-				changeState("playing");
-
-				boolean done = false;
-				long start = System.currentTimeMillis();
-				while (!done) {
-					if (_track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
-						Thread.sleep(50);
-						continue;
-					}
-
-					SampleBuffer frame = (SampleBuffer) decoder.decodeFrame(header, bitstream);
-					short[] pcm = frame.getBuffer();
-					bitstream.closeFrame();
-
-					if (!isTimingOnly()) {
-						_track.write(pcm, 0, pcm.length);
-						//Log.i("mp3decoders", "wrote " + (pcm.length / 2) + " frames");
-					}
-
-					header = bitstream.readFrame();
-					if (header == null)
-						done = true;
-				}
-				long end = System.currentTimeMillis();
-				Log.i("mp3decoders", "jlayer decoded in " + (end - start) + " milliseconds");
-
-				Log.i("mp3decoders", "done loading audiotrack");
-				changeState("finished playing");
-			} catch (BitstreamException e) {
-				Log.e("mp3decoders", "bitstreamexception", e);
-			} catch (DecoderException e) {
-				Log.e("mp3decoders", "decoderexception", e);
-			} catch (InterruptedException e) {
-				Log.e("mp3decoders", "InterruptedException", e);
-			} finally {
+		Runnable _streamerRunnable = new Runnable() {
+			@Override
+			public void run() {
 				try {
-					if (loop1 != null)
-						loop1.close();
-				} catch (IOException e) {
-					Log.e("mp3decoders", "ioexception", e);
-				}
+					while (true) {
+						// if seeking and we've already "downloaded" enough bytes to seek, just seek
+						// otherwise continue downloading until we've got enough
+						if (_seekToOffset != -1 &&_furthestRead > _seekToOffset) {
+							_file.seek(_seekToOffset);
+							_seekToOffset = -1;
+						}
 
-				waitAndCloseTrack();
+						// figure out how much of the file we have "downloaded"
+						// download 10000 bytes if we're at the edge of the file
+						int size = 10000;
+						if (_furthestRead > _file.getFilePointer())
+							size = (int) (_furthestRead - _file.getFilePointer());
+						byte[] c = new byte[size];
+
+						int read = _file.read(c);
+						if (read == -1)
+							break;
+						_streamer.feed(c, read);
+						_furthestRead = _file.getFilePointer();
+
+						//changeState(String.format("at %d bytes, %f seconds", _furthestRead, _streamer.getPosition()));
+
+						Thread.sleep(100);
+					}
+				} catch (IOException | InterruptedException ignored) { }
 			}
-
-		}
-	};
-
-	private boolean isTimingOnly() {
-		CheckBox timingOnly = (CheckBox)findViewById(R.id.timing);
-		return timingOnly.isChecked();
+		};
 	}
 
 	private void waitAndCloseTrack() {
@@ -227,28 +274,6 @@ public class MainActivity extends Activity {
 			_track = null;
 			_decoder = null;
 		}
-	}
-
-	private AudioTrack createTrackFromHeader(Header header) {
-		AudioTrack track = new AudioTrack(AudioManager.STREAM_MUSIC,
-				header.frequency(),
-				AudioFormat.CHANNEL_OUT_STEREO,
-				AudioFormat.ENCODING_PCM_16BIT,
-				header.bitrate() * 2,
-				AudioTrack.MODE_STREAM);
-		Log.i("mp3decoders", "ms per frame: " + header.ms_per_frame());
-		track.setPositionNotificationPeriod((int) (1000.0f * header.ms_per_frame()));
-		RadioGroup rg = (RadioGroup) findViewById(R.id.playbackRate);
-		switch (rg.getCheckedRadioButtonId()) {
-			case R.id.rate15:
-				track.setPlaybackRate((int) (header.frequency() * 1.5));
-				break;
-			case R.id.rate20:
-				track.setPlaybackRate((int) (header.frequency() * 2.0));
-				break;
-		}
-		track.setPlaybackPositionUpdateListener(playbackPositionListener);
-		return track;
 	}
 
 	private AudioTrack.OnPlaybackPositionUpdateListener playbackPositionListener = new AudioTrack.OnPlaybackPositionUpdateListener() {
@@ -305,7 +330,7 @@ public class MainActivity extends Activity {
 		}
 	};
 
-	private View.OnClickListener playJLayerHandler = new View.OnClickListener() {
+	private View.OnClickListener playMPG123StreamHandler = new View.OnClickListener() {
 		@Override
 		public void onClick(View view) {
 			if (_track != null) {
@@ -316,8 +341,8 @@ public class MainActivity extends Activity {
 
 			if (!requestAudioFocus())
 				return;
-			new Thread(jLayerRunnable).start();
-			Log.i("mp3decoders", "started JLayer thread");
+			new Thread(mpg123StreamRunnable).start();
+			Log.i("mp3decoders", "started MPG123 Stream thread");
 		}
 	};
 
@@ -370,9 +395,15 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-		findViewById(R.id.playJLayer).setOnClickListener(playJLayerHandler);
+		findViewById(R.id.playMPG123Stream).setOnClickListener(playMPG123StreamHandler);
 		findViewById(R.id.playMPG123).setOnClickListener(playMPG123Handler);
 		findViewById(R.id.playVorbis).setOnClickListener(playVorbisHandler);
+		findViewById(R.id.testStreamer).setOnClickListener(new View.OnClickListener() {
+			@Override
+			public void onClick(View view) {
+				MPG123.testStream();
+			}
+		});
 		findViewById(R.id.pause).setOnClickListener(pauseHandler);
 		_stateText = (TextView) findViewById(R.id.state);
 		changeState("init");

@@ -5,11 +5,18 @@ LOCAL_C_INCLUDES := $(LOCAL_PATH)
 LOCAL_MODULE     := vorbis
 LOCAL_ARM_MODE   := arm
 LOCAL_LDLIBS     := -llog
+
+ifeq ($(TARGET_ARCH),arm)
 LOCAL_CFLAGS     := -D_ARM_ASSEM_ \
 					-Wno-int-to-pointer-cast \
 					-Wno-pointer-to-int-cast
+endif
+ifeq ($(TARGET_ARCH),x86)
+LOCAL_CFLAGS     := -Wno-int-to-pointer-cast \
+					-Wno-pointer-to-int-cast
+endif
 
-LOCAL_SRC_FILES  := com_axelby_mp3decoders_Vorbis.c
+LOCAL_SRC_FILES  := podax_Vorbis.c
 LOCAL_SRC_FILES  += block.c
 LOCAL_SRC_FILES  += codebook.c
 LOCAL_SRC_FILES  += floor0.c

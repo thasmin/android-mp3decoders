@@ -1,27 +1,27 @@
 apply plugin: 'android'
 
 android {
-    compileSdkVersion 19
-    buildToolsVersion "19.0.3"
-
+    compileSdkVersion 21
+    buildToolsVersion "21.1.1"
     defaultConfig {
         minSdkVersion 15
-        targetSdkVersion 19
+        targetSdkVersion 21
         versionCode 1
         versionName "1.0"
     }
     buildTypes {
         release {
-            runProguard true
+            minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.txt'
         }
     }
-
-	/* preferably use the ndkbuild step of gradle but it doesn't work */
-	sourceSets.main {
-		jni.srcDirs = []
-		jniLibs.srcDir 'src/main/libs'
-	}
+    /* preferably use the ndkbuild step of gradle but it doesn't work */
+    sourceSets.main {
+        jni.srcDirs = []
+        jniLibs.srcDir 'src/main/libs'
+    }
+    productFlavors {
+    }
 }
 
 dependencies {
