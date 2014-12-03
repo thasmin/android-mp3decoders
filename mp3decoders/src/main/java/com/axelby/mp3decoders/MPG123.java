@@ -18,6 +18,7 @@ public class MPG123 implements IMediaDecoder {
 	protected static native long openFile(String filename);
 	protected static native void delete(long handle);
 	protected static native int readSamples(long handle, short[] buffer);
+	protected static native boolean skipFrame(long handle);
 	protected static native int seek(long handle, float offsetInSeconds);
 	protected static native float getPosition(long handle);
 	protected static native int getNumChannels(long handle);
@@ -27,7 +28,7 @@ public class MPG123 implements IMediaDecoder {
 	protected static native long openStream();
 	protected static native void feed(long handle, byte[] buffer, int count);
 	protected static native int readFrame(long handle, short[] buffer);
-	protected static native int seekFrameOffset(long handle, float position);
+	protected static native int getSeekFrameOffset(long handle, float position);
 
 	protected static native void testStream();
 
@@ -40,9 +41,8 @@ public class MPG123 implements IMediaDecoder {
 			MPG123.delete(_handle);
 	}
 
-	public int readSamples(short[] buffer) {
-		return MPG123.readSamples(_handle, buffer);
-	}
+	public int readSamples(short[] buffer) { return MPG123.readSamples(_handle, buffer); }
+	public boolean skipFrame() { return MPG123.skipFrame(_handle); }
 	public int seek(float offset) { return MPG123.seek(_handle, offset); }
 	public float getPosition() { return MPG123.getPosition(_handle); }
 	public int getNumChannels() { return MPG123.getNumChannels(_handle); }

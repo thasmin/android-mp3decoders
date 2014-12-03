@@ -1,14 +1,14 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:paddingLeft="@dimen/activity_horizontal_margin"
-    android:paddingRight="@dimen/activity_horizontal_margin"
-    android:paddingTop="@dimen/activity_vertical_margin"
-    android:paddingBottom="@dimen/activity_vertical_margin"
-    android:orientation="vertical"
-    tools:ignore="HardcodedText"
-    tools:context="com.axelby.mp3decoders.MainActivity">
+              xmlns:tools="http://schemas.android.com/tools"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:paddingLeft="@dimen/activity_horizontal_margin"
+              android:paddingRight="@dimen/activity_horizontal_margin"
+              android:paddingTop="@dimen/activity_vertical_margin"
+              android:paddingBottom="@dimen/activity_vertical_margin"
+              android:orientation="vertical"
+              tools:ignore="HardcodedText"
+              tools:context="com.axelby.mp3decoders.MainActivity">
 
     <TextView
         android:text="init"
@@ -16,19 +16,29 @@
         android:layout_height="wrap_content"
         android:id="@+id/state"/>
 
-    <Button
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Play as MPG123 Stream"
-            android:id="@+id/playMPG123Stream"
-            />
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:id="@+id/state2"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:id="@+id/state3"/>
 
     <Button
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Play with MPG123"
-            android:id="@+id/playMPG123"
-            />
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Play as MPG123 Stream"
+        android:id="@+id/playMPG123Stream"
+        />
+
+    <Button
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Play with MPG123"
+        android:id="@+id/playMPG123"
+        />
 
     <Button
         android:layout_width="wrap_content"
@@ -37,11 +47,11 @@
         android:id="@+id/testStreamer"/>
 
     <Button
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Play with Vorbis"
-            android:id="@+id/playVorbis"
-            />
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Play with Vorbis"
+        android:id="@+id/playVorbis"
+        />
 
     <Button
         android:layout_width="wrap_content"

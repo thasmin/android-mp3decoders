@@ -31,7 +31,7 @@ public class Vorbis implements IMediaDecoder {
 	public int readSamples(short[] buffer) {
 		return Vorbis.readSamples(_handle, buffer);
 	}
-	public int skipSamples(int numSamples) { return Vorbis.skipSamples(_handle, numSamples); }
+	public boolean skipFrame() { return false; } //return Vorbis.skipFrame(_handle); }
 	public boolean isSeekable() { return Vorbis.isSeekable(_handle) != 0; }
 	@Override public int seek(float offset) { return Vorbis.seek(_handle, offset); }
 	@Override public float getPosition() {

@@ -11,14 +11,18 @@ import android.view.View;
 import android.widget.TextView;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.RandomAccessFile;
 
 public class MainActivity extends Activity {
 	private TextView _stateText;
+	private TextView _state2Text;
+	private TextView _state3Text;
 	private AudioTrack _track = null;
 	IMediaDecoder _decoder;
 	MPG123Stream _streamer;
@@ -40,7 +44,7 @@ public class MainActivity extends Activity {
 	private Runnable mpg123StreamRunnable = new Runnable() {
 		@Override
 		public void run() {
-			playStream(new MPG123Stream(), getFilesDir() + "/loop1.mp3");
+			playStream(new MPG123Stream(), getFilesDir() + "/streamed.mp3");
 		}
 	};
 
@@ -110,13 +114,16 @@ public class MainActivity extends Activity {
 	private void playStream(IMediaDecoder decoder, String filename) {
 		_decoder = _streamer = (MPG123Stream) decoder;
 
-		Piper piper = null;
-		int rate = 0;
-		int numChannels = 0;
+		Thread fakeStreamer = null;
+		Feeder feeder;
+		int rate;
+		int numChannels;
 
 		try {
-			piper = new Piper(filename);
-			piper.start();
+			fakeStreamer = new Thread(_fakeStream, "fakeStreamer");
+			fakeStreamer.start();
+			feeder = new Feeder(filename);
+			feeder.start();
 
 			// find rate and numchannels - feed until there's enough data for it
 			rate = _decoder.getRate();
@@ -139,6 +146,8 @@ public class MainActivity extends Activity {
 			_track.play();
 			changeState("playing");
 
+			streamSeekTo(feeder, rate, numChannels, 5f);
+
 			short[] pcm = new short[1000 * 5];
 			while (true) {
 				if (_track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
@@ -157,7 +166,7 @@ public class MainActivity extends Activity {
 					_track.write(pcm, 0, samples);
 
 					if (_decoder.getPosition() > 6f)
-						streamSeekTo(piper, rate, numChannels, 1f);
+						streamSeekTo(feeder, rate, numChannels, 1f);
 				}
 			}
 		} catch (InterruptedException e) {
@@ -165,10 +174,15 @@ public class MainActivity extends Activity {
 		} catch (IOException e) {
 			Log.e("mp3decoders", "IOException", e);
 		} finally {
-			if (piper != null)
-				piper.release();
 			_decoder.close();
 			waitAndCloseTrack();
+
+			if (fakeStreamer != null) {
+				fakeStreamer.interrupt();
+				try {
+					fakeStreamer.join();
+				} catch (InterruptedException ignored) { }
+			}
 		}
 
 		Log.i("mp3decoders", "done loading audiotrack");
@@ -176,18 +190,29 @@ public class MainActivity extends Activity {
 	}
 
 	// trash the current track, seek, wait until seeking is done, then recreate the track
-	private void streamSeekTo(Piper piper, int rate, int numChannels, float seekToSeconds) throws InterruptedException {
+	private void streamSeekTo(Feeder feeder, int rate, int numChannels, float seekToSeconds) throws InterruptedException {
 		_track.pause();
 		_track.flush();
 		_track.release();
 		_track = null;
 
-		_decoder = _streamer = new MPG123Stream();
-
-		int offset = _streamer.seekFrameOffset(seekToSeconds);
-		piper.seekTo(offset);
-		while (!piper.doneSeeking())
+		changeState("seeking to " + seekToSeconds + " seconds");
+		int offset = _streamer.getSeekFrameOffset(seekToSeconds);
+		while (offset == -1) {
+			boolean frameSkipped = true;
+			changeState("skipping frames while seeking to " + seekToSeconds + " seconds");
+			while (frameSkipped && offset == -1) {
+				frameSkipped = _decoder.skipFrame();
+				offset = _streamer.getSeekFrameOffset(seekToSeconds);
+			}
+			changeState("waiting for more bytes while seeking to " + seekToSeconds + " seconds");
 			Thread.sleep(50);
+		}
+		changeState("done seeking to " + seekToSeconds + " seconds");
+		_decoder.close();
+
+		_decoder = _streamer = new MPG123Stream();
+		feeder.seekTo(offset);
 
 		_track = new AudioTrack(AudioManager.STREAM_MUSIC,
 				rate,
@@ -200,62 +225,125 @@ public class MainActivity extends Activity {
 		_track.play();
 	}
 
-	// pipes data from a file to the parent class's stream
-	public class Piper {
-		Thread _streamerThread = null;
-		RandomAccessFile _file = null;
-		long _seekToOffset = -1;
-		long _furthestRead = 0; // the number of bytes we've "downloaded"
-
-		public Piper(String filename) throws FileNotFoundException {
-			_file = new RandomAccessFile(filename, "r");
-			_streamerThread = new Thread(_streamerRunnable, "streamer");
-		}
-		public void start() { _streamerThread.start(); }
-		public void release() {
+	boolean _doneFeeding = false;
+	Runnable _fakeStream = new Runnable() {
+		@Override
+		public void run() {
+			InputStream inStream = null;
+			OutputStream outStream = null;
 			try {
-				_file.close();
-			} catch (IOException ignored) { }
-		}
-		public void seekTo(long offset) {
-			_seekToOffset = offset;
-			if (!_streamerThread.isAlive()) {
-				_streamerThread = new Thread(_streamerRunnable, "streamer");
-				_streamerThread.start();
+				_doneFeeding = false;
+				File out = new File(getFilesDir() + "/streamed.mp3");
+				if (out.exists())
+					out.delete();
+				out.createNewFile();
+				File in = new File(getFilesDir() + "/loop1.mp3");
+
+				byte[] b = new byte[10000];
+				int total = 0;
+				int read;
+				inStream = new FileInputStream(in);
+				outStream = new FileOutputStream(out);
+				while ((read = inStream.read(b)) != -1) {
+					outStream.write(b, 0, read);
+					outStream.flush();
+					total += read;
+					changeState2("downloaded " + total + " bytes");
+					Thread.sleep(1000);
+				}
+			} catch (IOException | InterruptedException e) {
+				Log.e("mp3decoders", "cannot stream file", e);
+			} finally {
+				_doneFeeding = true;
+				try {
+					if (inStream != null)
+						inStream.close();
+				} catch (IOException e) {
+					Log.e("mp3decoders", "unable to close fake streamer input stream", e);
+				}
+
+				try {
+					if (outStream != null)
+						outStream.close();
+				} catch (IOException e) {
+					Log.e("mp3decoders", "unable to close fake streamer output stream", e);
+				}
 			}
 		}
-		public boolean doneSeeking() { return _seekToOffset == -1; }
+	};
 
-		Runnable _streamerRunnable = new Runnable() {
+	// pipes data from a file to the parent class's stream
+	public class Feeder {
+		Thread _feederThread = null;
+		String _filename;
+		long _seekToOffset = -1;
+
+		public Feeder(String filename) throws FileNotFoundException {
+			_filename = filename;
+			_feederThread = new Thread(_feederRunnable, "feeder");
+		}
+		public void start() { _feederThread.start(); }
+		public void seekTo(long offset) {
+			_seekToOffset = offset;
+			if (!_feederThread.isAlive()) {
+				_feederThread = new Thread(_feederRunnable, "streamer");
+				_feederThread.start();
+			}
+		}
+
+		Runnable _feederRunnable = new Runnable() {
 			@Override
 			public void run() {
+				long filePosition = 0;
+				RandomAccessFile file = null;
 				try {
 					while (true) {
-						// if seeking and we've already "downloaded" enough bytes to seek, just seek
-						// otherwise continue downloading until we've got enough
-						if (_seekToOffset != -1 &&_furthestRead > _seekToOffset) {
-							_file.seek(_seekToOffset);
-							_seekToOffset = -1;
+						// make sure the file exists
+						if (!new File(_filename).exists()) {
+							Thread.sleep(50);
+							continue;
 						}
 
-						// figure out how much of the file we have "downloaded"
-						// download 10000 bytes if we're at the edge of the file
-						int size = 10000;
-						if (_furthestRead > _file.getFilePointer())
-							size = (int) (_furthestRead - _file.getFilePointer());
-						byte[] c = new byte[size];
+						file = new RandomAccessFile(_filename, "r");
+						file.seek(filePosition);
 
-						int read = _file.read(c);
-						if (read == -1)
+						// attempt to seek to the proper place
+						// if we're not there, wait for more data and try again
+						while (_seekToOffset != -1) {
+							file.seek(_seekToOffset);
+							if (file.getFilePointer() == _seekToOffset)
+								_seekToOffset = -1;
+							Thread.sleep(50);
+						}
+
+						// read the available bytes from the file and feed them to the mp3 decoder
+						int size = (int) (file.length() - file.getFilePointer());
+						byte[] c = new byte[size];
+						int read = file.read(c);
+						if (read > 0) {
+							_streamer.feed(c, read);
+							changeState3("feed decoder up to " + file.getFilePointer() + " bytes");
+						}
+						else if (read == -1 && _doneFeeding)
 							break;
-						_streamer.feed(c, read);
-						_furthestRead = _file.getFilePointer();
+
+						// save the position so we can jump back here when we reopen it
+						filePosition = file.getFilePointer();
+						file.close();
 
 						//changeState(String.format("at %d bytes, %f seconds", _furthestRead, _streamer.getPosition()));
-
-						Thread.sleep(100);
+						Thread.sleep(50);
 					}
-				} catch (IOException | InterruptedException ignored) { }
+				} catch (IOException | InterruptedException e) {
+					Log.e("mp3decoders", "unable to feed decoder", e);
+				} finally {
+					try {
+						if (file != null)
+							file.close();
+					} catch (IOException e) {
+						Log.e("mp3decoders", "unable to close feed decoder file", e);
+					}
+				}
 			}
 		};
 	}
@@ -316,6 +404,24 @@ public class MainActivity extends Activity {
 			@Override
 			public void run() {
 				_stateText.setText(playerState);
+			}
+		});
+	}
+
+	private void changeState2(final CharSequence playerState) {
+		this.runOnUiThread(new Runnable() {
+			@Override
+			public void run() {
+				_state2Text.setText(playerState);
+			}
+		});
+	}
+
+	private void changeState3(final CharSequence playerState) {
+		this.runOnUiThread(new Runnable() {
+			@Override
+			public void run() {
+				_state3Text.setText(playerState);
 			}
 		});
 	}
@@ -406,7 +512,17 @@ public class MainActivity extends Activity {
 		});
 		findViewById(R.id.pause).setOnClickListener(pauseHandler);
 		_stateText = (TextView) findViewById(R.id.state);
+		_state2Text = (TextView) findViewById(R.id.state2);
+		_state3Text = (TextView) findViewById(R.id.state3);
 		changeState("init");
+
+		try {
+			File streamedFile = new File(getFilesDir() + "/streamed.mp3");
+			streamedFile.delete();
+			streamedFile.createNewFile();
+		} catch (IOException e) {
+			Log.e("mp3decoders", "unable to recreate streamed file", e);
+		}
 
 		try {
 			if (!new File(getFilesDir() + "/loop1.mp3").exists()) {

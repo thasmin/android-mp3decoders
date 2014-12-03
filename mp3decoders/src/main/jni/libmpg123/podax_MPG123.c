@@ -242,6 +242,23 @@ JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_readFrame
 	return bytes_done / 2;
 }
 
+JNIEXPORT jboolean JNICALL Java_com_axelby_mp3decoders_MPG123_skipFrame
+	(JNIEnv *env, jclass c, jlong handle)
+{
+    MP3File *mp3 = (MP3File *)handle;
+	mpg123_handle *mh = mp3->handle;
+
+	mp3->leftSamples = 0;
+	mp3->offset = 0;
+
+	off_t frame_offset;
+	unsigned char* audio;
+	size_t bytes_done;
+	int err = mpg123_decode_frame(mh, &frame_offset, &audio, &bytes_done);
+	return (err == MPG123_OK) ? JNI_TRUE : JNI_FALSE;
+}
+
+
 JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_readSamples
 	(JNIEnv *env, jclass c, jlong handle, jshortArray obj_buffer)
 {
@@ -264,7 +281,6 @@ JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_readSamples
 				idx++;
 			}
         } else {
-
 			int samplesRead;
 			int err = mpg123_read(mp3->handle, mp3->buffer, mp3->buffer_size, &samplesRead);
 			if (err == MPG123_OK) {
@@ -295,26 +311,6 @@ JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_readSamples
 
 	(*env)->ReleasePrimitiveArrayCritical(env, obj_buffer, buffer, 0);
     return idx;
-}
-
-JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_skipSamples
-	(JNIEnv *env, jclass c, jlong handle, jint numSamples)
-{
-    MP3File *mp3 = (MP3File *)handle;
-    int idx = 0;
-    while (idx != numSamples)
-    {
-        if (mp3->leftSamples > 0) {
-           while(idx < numSamples && mp3->offset < mp3->buffer_size / 2) {
-			   mp3->leftSamples--;
-			   mp3->offset++;
-			   idx++;
-		   }
-		} else if (readBuffer(mp3) == 0)
-			return 0;
-    }
-
-    return idx > numSamples ? 0 : idx;
 }
 
 JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_seek
@@ -395,7 +391,7 @@ JNIEXPORT jintArray JNICALL Java_com_axelby_mp3decoders_MPG123_getSupportedRates
 	return result;
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_seekFrameOffset
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_getSeekFrameOffset
 	(JNIEnv *env, jclass c, jlong mp3file, jfloat seconds)
 {
     MP3File *mp3 = (MP3File *)mp3file;
@@ -408,9 +404,9 @@ JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_seekFrameOffset
 
 	int target_frame = (int) (seconds / mp3->secs_per_frame); // the frame number to seek to
 	int target_index = target_frame / step; // the closest index to the target frame
-	// if there aren't enough entries in the index, use the last index
+	// say so if there aren't enough entries in the index
 	if (target_index > fill)
-		target_index = fill - 1;
+		return -1;
 	return offsets[target_index];
 }
 
