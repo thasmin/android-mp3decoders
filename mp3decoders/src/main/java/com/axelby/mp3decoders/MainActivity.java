@@ -91,7 +91,7 @@ public class MainActivity extends Activity {
 			long start = System.currentTimeMillis();
 			int samples;
 			short[] pcm = new short[1000 * 5];
-			while ((samples = _decoder.readSamples(pcm)) > 0) {
+			while ((samples = _decoder.readFrame(pcm)) > 0) {
 				if (_track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
 					Thread.sleep(50);
 					continue;
@@ -155,7 +155,7 @@ public class MainActivity extends Activity {
 					continue;
 				}
 
-				int samples = _decoder.readSamples(pcm);
+				int samples = _decoder.readFrame(pcm);
 				if (samples == -1) {
 					Thread.sleep(50);
 					continue;

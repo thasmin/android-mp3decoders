@@ -16,10 +16,6 @@ typedef struct _MP3File
 	double secs_per_frame;
 	long num_frames;
 	float duration;
-	size_t buffer_size;
-	unsigned char* buffer;
-	size_t leftSamples;
-	size_t offset;
 } MP3File;
 
 MP3File* mp3file_init(mpg123_handle *handle) {
@@ -32,7 +28,6 @@ MP3File* mp3file_init(mpg123_handle *handle) {
 void mp3file_delete(MP3File *mp3file) {
 	mpg123_close(mp3file->handle);
 	mpg123_delete(mp3file->handle);
-	free(mp3file->buffer);
 	free(mp3file);
 }
 
@@ -149,9 +144,6 @@ JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_MPG123_openFile
         const char* fileString = (*env)->GetStringUTFChars(env, filename, NULL);
         err = mpg123_open(mh, fileString);
 
-		mp3->buffer_size = mpg123_outblock(mh);
-		mp3->buffer = (unsigned char*)malloc(mp3->buffer_size);
-
         if (err != MPG123_OK)
         {
 			(*env)->ReleaseStringUTFChars(env, filename, fileString);
@@ -209,17 +201,6 @@ JNIEXPORT void JNICALL Java_com_axelby_mp3decoders_MPG123_delete
 	mp3file_delete(mp3);
 }
 
-static inline int readBuffer(MP3File* mp3)
-{
-	int samplesRead;
-    int err = mpg123_read(mp3->handle, mp3->buffer, mp3->buffer_size, &samplesRead);
-	if (err == MPG123_OK) {
-		mp3->leftSamples = samplesRead / 2;
-		mp3->offset = 0;
-	}
-	return err;
-}
-
 JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_readFrame
 	(JNIEnv *env, jclass c, jlong handle, jshortArray out_buffer)
 {
@@ -248,69 +229,11 @@ JNIEXPORT jboolean JNICALL Java_com_axelby_mp3decoders_MPG123_skipFrame
     MP3File *mp3 = (MP3File *)handle;
 	mpg123_handle *mh = mp3->handle;
 
-	mp3->leftSamples = 0;
-	mp3->offset = 0;
-
 	off_t frame_offset;
 	unsigned char* audio;
 	size_t bytes_done;
 	int err = mpg123_decode_frame(mh, &frame_offset, &audio, &bytes_done);
 	return (err == MPG123_OK) ? JNI_TRUE : JNI_FALSE;
-}
-
-
-JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_readSamples
-	(JNIEnv *env, jclass c, jlong handle, jshortArray obj_buffer)
-{
-    MP3File *mp3 = (MP3File *)handle;
-	short* buffer = (short*)(*env)->GetPrimitiveArrayCritical(env, obj_buffer, 0);
-    short* target = buffer;
-	int numSamples = (*env)->GetArrayLength(env, obj_buffer);
-
-	int idx = 0;
-    while (idx != numSamples)
-    {
-        if (mp3->leftSamples > 0) {
-            short* src = ((short*)mp3->buffer) + mp3->offset;
-            while (idx < numSamples && mp3->offset < mp3->buffer_size / 2) {
-                *target = *src;
-				mp3->leftSamples--;
-				mp3->offset++;
-				target++;
-				src++;
-				idx++;
-			}
-        } else {
-			int samplesRead;
-			int err = mpg123_read(mp3->handle, mp3->buffer, mp3->buffer_size, &samplesRead);
-			if (err == MPG123_OK) {
-				mp3->leftSamples = samplesRead / 2;
-				mp3->offset = 0;
-			}
-
-			if (err == MPG123_NEED_MORE) {
-				(*env)->ReleasePrimitiveArrayCritical(env, obj_buffer, buffer, 0);
-				return -1;
-			}
-			// MPG123_DONE with an empty buffer means we're done
-			if (idx == 0 && err == MPG123_DONE) {
-				(*env)->ReleasePrimitiveArrayCritical(env, obj_buffer, buffer, 0);
-				return 0;
-			}
-			// unknown error
-			if (err != MPG123_OK) {
-				(*env)->ReleasePrimitiveArrayCritical(env, obj_buffer, buffer, 0);
-				return -2;
-			}
-			// if we got MPG123_OK and didn't read samples, we need to read more
-			if (samplesRead == 0) {
-				return -1;
-			}
-		}
-    }
-
-	(*env)->ReleasePrimitiveArrayCritical(env, obj_buffer, buffer, 0);
-    return idx;
 }
 
 JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_seek

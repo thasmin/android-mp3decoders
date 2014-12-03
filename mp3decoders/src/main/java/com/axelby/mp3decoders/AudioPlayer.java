@@ -177,7 +177,7 @@ public class AudioPlayer implements Runnable {
 					Thread.sleep(50);
 					continue;
 				}
-				int sampleCount = _decoder.readSamples(pcm);
+				int sampleCount = _decoder.readFrame(pcm);
 				if (sampleCount == 0)
 					break;
 				short[] wsolapcm = wsola.stretch(pcm, _decoder.getRate(), _decoder.getNumChannels() == 2, _playbackRate, 1, wsolaError);

@@ -2,7 +2,7 @@ package com.axelby.mp3decoders;
 
 public interface IMediaDecoder {
 	void close();
-	int readSamples(short[] buffer);
+	int readFrame(short[] buffer);
 	boolean skipFrame();
 	int seek(float offsetInSeconds);
 	float getPosition();

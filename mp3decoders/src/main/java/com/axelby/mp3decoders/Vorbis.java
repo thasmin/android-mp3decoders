@@ -7,8 +7,8 @@ public class Vorbis implements IMediaDecoder {
 
 	private static native long openFile(String filename);
 	private static native void delete(long handle);
-	private static native int readSamples(long handle, short[] buffer);
-	private static native int skipSamples(long handle, int numSamples);
+	private static native int readFrame(long handle, short[] buffer);
+	private static native boolean skipFrame(long handle);
 	private static native int isSeekable(long handle);
 	private static native int seek(long handle, float offset);
 	private static native float getPosition(long handle);
@@ -27,11 +27,8 @@ public class Vorbis implements IMediaDecoder {
 			Vorbis.delete(_handle);
 	}
 
-	@Override
-	public int readSamples(short[] buffer) {
-		return Vorbis.readSamples(_handle, buffer);
-	}
-	public boolean skipFrame() { return false; } //return Vorbis.skipFrame(_handle); }
+	@Override public int readFrame(short[] buffer) { return Vorbis.readFrame(_handle, buffer); }
+	@Override public boolean skipFrame() { return Vorbis.skipFrame(_handle); }
 	public boolean isSeekable() { return Vorbis.isSeekable(_handle) != 0; }
 	@Override public int seek(float offset) { return Vorbis.seek(_handle, offset); }
 	@Override public float getPosition() {
