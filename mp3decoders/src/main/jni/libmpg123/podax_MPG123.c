@@ -6,6 +6,10 @@
 #include <string.h>
 #include <stdio.h>
 
+void printerr(const char* message, int err) {
+	__android_log_print(ANDROID_LOG_ERROR, "podax-jni", "error - %s: %d %s", message, err, mpg123_plain_strerror(err));
+}
+
 typedef struct _MP3File
 {
 	mpg123_handle* handle;
@@ -38,30 +42,28 @@ int mp3file_determineStats(MP3File *mp3) {
 	int encoding;
 	mpg123_handle* mh = mp3->handle;
 	int err = mpg123_getformat(mh, &mp3->rate, &mp3->channels, &encoding);
-	if (err == MPG123_OK)
-	{
-		mpg123_format_none(mh);
-		mpg123_format(mh, mp3->rate, mp3->channels, encoding);
-
-		mp3->num_samples = mpg123_length(mh);
-		mp3->samples_per_frame = mpg123_spf(mh);
-		mp3->secs_per_frame = mpg123_tpf(mh);
-
-		if (mp3->num_samples == MPG123_ERR || mp3->samples_per_frame < 0)
-			mp3->num_frames = 0;
-		else
-			mp3->num_frames = mp3->num_samples / mp3->samples_per_frame;
-
-		if (mp3->num_samples == MPG123_ERR || mp3->samples_per_frame < 0 || mp3->secs_per_frame < 0)
-			mp3->duration = 0;
-		else
-			mp3->duration = mp3->num_samples / mp3->samples_per_frame * mp3->secs_per_frame;
+	if (err != MPG123_OK) {
+		printerr("mpg123_getformat", err);
+		return err;
 	}
-	return err;
-}
 
-void printerr(const char* message, int err) {
-	__android_log_print(ANDROID_LOG_ERROR, "podax-jni", "error - %s: %d %s", message, err, mpg123_plain_strerror(err));
+	mpg123_format_none(mh);
+	mpg123_format(mh, mp3->rate, mp3->channels, encoding);
+
+	mp3->num_samples = mpg123_length(mh);
+	mp3->samples_per_frame = mpg123_spf(mh);
+	mp3->secs_per_frame = mpg123_tpf(mh);
+
+	if (mp3->num_samples == MPG123_ERR || mp3->samples_per_frame < 0)
+		mp3->num_frames = 0;
+	else
+		mp3->num_frames = mp3->num_samples / mp3->samples_per_frame;
+
+	if (mp3->num_samples == MPG123_ERR || mp3->samples_per_frame < 0 || mp3->secs_per_frame < 0)
+		mp3->duration = 0;
+	else
+		mp3->duration = mp3->num_samples / mp3->samples_per_frame * mp3->secs_per_frame;
+	return err;
 }
 
 JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_init
@@ -136,62 +138,68 @@ JNIEXPORT void JNICALL Java_com_axelby_mp3decoders_MPG123_feed
 JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_MPG123_openFile
 	(JNIEnv *env, jclass c, jstring filename)
 {
-    int err = MPG123_OK;
-    mpg123_handle *mh = mpg123_new(NULL, &err);
-    if (err == MPG123_OK && mh != NULL)
-    {
-        MP3File* mp3 = mp3file_init(mh);
-        const char* fileString = (*env)->GetStringUTFChars(env, filename, NULL);
-        err = mpg123_open(mh, fileString);
-
-        if (err != MPG123_OK)
-        {
-			(*env)->ReleaseStringUTFChars(env, filename, fileString);
-			mp3file_delete(mp3);
-			return err;
-		}
-
-		/*
-		char* index_fn = calloc(1, strlen(fileString) + 6 + 1);
-		strcpy(index_fn, fileString);
-		// remove last path (Podcasts/)
-		char* lastSlash = strrchr(index_fn, '/');
-		char* lastDir = strstr(index_fn, "/Podcasts/");
-		memmove(lastDir, lastSlash, index_fn + strlen(index_fn) - lastSlash + 1);
-		strcat(index_fn, ".index");
-		(*env)->ReleaseStringUTFChars(env, filename, fileString);
-
-		// save / restore index for fast seeking
-		size_t idx_fill;
-		off_t idx_step;
-		off_t* idx_offsets;
-		FILE* index_file = fopen(index_fn, "rb");
-		if (index_file != NULL) {
-			fread(&idx_fill, sizeof(size_t), 1, index_file);
-			fread(&idx_step, sizeof(off_t), 1, index_file);
-			idx_offsets = malloc(idx_fill * sizeof(off_t));
-			fread(idx_offsets, sizeof(off_t), idx_fill, index_file);
-			fclose(index_file);
-			mpg123_set_index(mh, idx_offsets, idx_step, idx_fill);
-		} else {
-			mpg123_scan(mh);
-			mpg123_index(mh, &idx_offsets, &idx_step, &idx_fill);
-			index_file = fopen(index_fn, "wb");
-			fwrite(&idx_fill, sizeof(size_t), 1, index_file);
-			fwrite(&idx_step, sizeof(off_t), 1, index_file);
-			fwrite(idx_offsets, sizeof(off_t), idx_fill, index_file);
-			fclose(index_file);
-		}
-		free(index_fn);
-		*/
-
-		// determine format and length
-		mp3file_determineStats(mp3);
-		return (jlong)mp3;
-    } else {
-		__android_log_write(ANDROID_LOG_INFO, "podax-jni", mpg123_plain_strerror(err));
+	int err = MPG123_OK;
+	mpg123_handle *mh = mpg123_new(NULL, &err);
+	if (err != MPG123_OK) {
+		printerr("mpg123_new", err);
+		return 0;
 	}
-    return MPG123_OK;
+	if (mh == NULL) {
+		__android_log_write(ANDROID_LOG_INFO, "podax-jni", "mpg123_handle is NULL");
+		return 0;
+	}
+
+__android_log_write(ANDROID_LOG_INFO, "podax-jni", "created handle");
+	MP3File* mp3 = mp3file_init(mh);
+	const char* fileString = (*env)->GetStringUTFChars(env, filename, NULL);
+	err = mpg123_open(mh, fileString);
+	if (err != MPG123_OK)
+	{
+		printerr("mpg123_open", err);
+		(*env)->ReleaseStringUTFChars(env, filename, fileString);
+		mp3file_delete(mp3);
+		return err;
+	}
+__android_log_write(ANDROID_LOG_INFO, "podax-jni", "opened file");
+
+	/*
+	char* index_fn = calloc(1, strlen(fileString) + 6 + 1);
+	strcpy(index_fn, fileString);
+	// remove last path (Podcasts/)
+	char* lastSlash = strrchr(index_fn, '/');
+	char* lastDir = strstr(index_fn, "/Podcasts/");
+	memmove(lastDir, lastSlash, index_fn + strlen(index_fn) - lastSlash + 1);
+	strcat(index_fn, ".index");
+	(*env)->ReleaseStringUTFChars(env, filename, fileString);
+
+	// save / restore index for fast seeking
+	size_t idx_fill;
+	off_t idx_step;
+	off_t* idx_offsets;
+	FILE* index_file = fopen(index_fn, "rb");
+	if (index_file != NULL) {
+		fread(&idx_fill, sizeof(size_t), 1, index_file);
+		fread(&idx_step, sizeof(off_t), 1, index_file);
+		idx_offsets = malloc(idx_fill * sizeof(off_t));
+		fread(idx_offsets, sizeof(off_t), idx_fill, index_file);
+		fclose(index_file);
+		mpg123_set_index(mh, idx_offsets, idx_step, idx_fill);
+	} else {
+		mpg123_scan(mh);
+		mpg123_index(mh, &idx_offsets, &idx_step, &idx_fill);
+		index_file = fopen(index_fn, "wb");
+		fwrite(&idx_fill, sizeof(size_t), 1, index_file);
+		fwrite(&idx_step, sizeof(off_t), 1, index_file);
+		fwrite(idx_offsets, sizeof(off_t), idx_fill, index_file);
+		fclose(index_file);
+	}
+	free(index_fn);
+	*/
+
+	// determine format and length
+	mp3file_determineStats(mp3);
+__android_log_write(ANDROID_LOG_INFO, "podax-jni", "determined stats");
+	return (jlong)mp3;
 }
 
 JNIEXPORT void JNICALL Java_com_axelby_mp3decoders_MPG123_delete
@@ -213,6 +221,12 @@ JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_readFrame
 	int err = mpg123_decode_frame(mh, &frame_offset, &audio, &bytes_done);
 	if (err == MPG123_NEED_MORE)
 		return -1;
+	if (err == MPG123_DONE)
+		return 0;
+	if (err != MPG123_OK) {
+		printerr("mpg123_decode_frame", err);
+		return -2;
+	}
 
 	if (out_buffer == NULL || (*env)->GetArrayLength(env, out_buffer) < bytes_done / 2)
 		out_buffer = (*env)->NewShortArray(env, bytes_done/2);

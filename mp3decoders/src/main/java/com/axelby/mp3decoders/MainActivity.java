@@ -27,6 +27,14 @@ public class MainActivity extends Activity {
 	IMediaDecoder _decoder;
 	MPG123Stream _streamer;
 
+	private View.OnClickListener skip1sHandler = new View.OnClickListener() {
+		@Override public void onClick(View view) { _decoder.seek(1f); }
+	};
+
+	private View.OnClickListener skip6sHandler = new View.OnClickListener() {
+		@Override public void onClick(View view) { _decoder.seek(6f); }
+	};
+
 	private Runnable vorbisRunnable = new Runnable() {
 		@Override
 		public void run() {
@@ -73,8 +81,10 @@ public class MainActivity extends Activity {
 
 	private void playFromDecoder(IMediaDecoder decoder) {
 		_decoder = decoder;
+
 		int rate = _decoder.getRate();
 		int numChannels = _decoder.getNumChannels();
+
 		_track = new AudioTrack(AudioManager.STREAM_MUSIC,
 				rate,
 				numChannels == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO,
@@ -87,19 +97,22 @@ public class MainActivity extends Activity {
 		changeState("playing");
 
 		try {
-			int total = 0;
-			long start = System.currentTimeMillis();
-			int samples;
 			short[] pcm = new short[1000 * 5];
-			while ((samples = _decoder.readFrame(pcm)) > 0) {
+			boolean stop = false;
+			do {
 				if (_track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
+					changeState("paused");
 					Thread.sleep(50);
 					continue;
 				}
-				_track.write(pcm, 0, samples);
-			}
-			long end = System.currentTimeMillis();
-			Log.i("mp3decoders", "decoded " + total + " frames in " + (end - start) + " milliseconds");
+				int samples = _decoder.readFrame(pcm);
+				if (samples > 0)
+					_track.write(pcm, 0, samples);
+				if (samples == 0) {
+					changeState("done");
+					stop = true;
+				}
+			} while (!stop);
 		} catch (InterruptedException e) {
 			Log.e("mp3decoders", "InterruptedException", e);
 		} finally {
@@ -107,7 +120,6 @@ public class MainActivity extends Activity {
 			waitAndCloseTrack();
 		}
 
-		Log.i("mp3decoders", "done loading audiotrack");
 		changeState("finished playing");
 	}
 
@@ -504,12 +516,8 @@ public class MainActivity extends Activity {
 		findViewById(R.id.playMPG123Stream).setOnClickListener(playMPG123StreamHandler);
 		findViewById(R.id.playMPG123).setOnClickListener(playMPG123Handler);
 		findViewById(R.id.playVorbis).setOnClickListener(playVorbisHandler);
-		findViewById(R.id.testStreamer).setOnClickListener(new View.OnClickListener() {
-			@Override
-			public void onClick(View view) {
-				MPG123.testStream();
-			}
-		});
+		findViewById(R.id.skip1s).setOnClickListener(skip1sHandler);
+		findViewById(R.id.skip6s).setOnClickListener(skip6sHandler);
 		findViewById(R.id.pause).setOnClickListener(pauseHandler);
 		_stateText = (TextView) findViewById(R.id.state);
 		_state2Text = (TextView) findViewById(R.id.state2);

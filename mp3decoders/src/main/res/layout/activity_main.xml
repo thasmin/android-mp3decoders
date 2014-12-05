@@ -43,12 +43,6 @@
     <Button
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Test Streamer"
-        android:id="@+id/testStreamer"/>
-
-    <Button
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
         android:text="Play with Vorbis"
         android:id="@+id/playVorbis"
         />
@@ -59,5 +53,17 @@
         android:text="Pause"
         android:id="@+id/pause"
         />
+
+    <Button
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Skip to 1s"
+        android:id="@+id/skip1s"/>
+
+    <Button
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Skip to 6s"
+        android:id="@+id/skip6s"/>
 
 </LinearLayout>
