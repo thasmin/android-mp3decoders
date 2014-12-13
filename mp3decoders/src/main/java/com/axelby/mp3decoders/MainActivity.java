@@ -8,6 +8,7 @@ import android.media.AudioTrack;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
+import android.widget.RadioGroup;
 import android.widget.TextView;
 
 import java.io.File;
@@ -17,22 +18,27 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.RandomAccessFile;
 
 public class MainActivity extends Activity {
 	private TextView _stateText;
 	private TextView _state2Text;
-	private TextView _state3Text;
+
+	private float _seekTo = -1f;
+	private float _seekbase = 0;
 	private AudioTrack _track = null;
-	IMediaDecoder _decoder;
-	MPG123Stream _streamer;
+	private Feeder _feeder = null;
+	private IMediaDecoder _decoder;
+
+	private Feeder _fullFeeder = null;
+	private IMediaDecoder _fullDecoder;
+	private StreamSkipper _fullSkipper;
 
 	private View.OnClickListener skip1sHandler = new View.OnClickListener() {
-		@Override public void onClick(View view) { _decoder.seek(1f); }
+		@Override public void onClick(View view) { _seekTo = 1f; }
 	};
 
 	private View.OnClickListener skip6sHandler = new View.OnClickListener() {
-		@Override public void onClick(View view) { _decoder.seek(6f); }
+		@Override public void onClick(View view) { _seekTo = 6f; }
 	};
 
 	private Runnable vorbisRunnable = new Runnable() {
@@ -45,39 +51,16 @@ public class MainActivity extends Activity {
 	private Runnable mpg123Runnable = new Runnable() {
 		@Override
 		public void run() {
-			playFromDecoder(new MPG123(getFilesDir() + "/loop1.mp3"));
+			playStream(new MPG123(getFilesDir() + "/loop1.mp3"), null);
 		}
 	};
 
 	private Runnable mpg123StreamRunnable = new Runnable() {
 		@Override
 		public void run() {
-			playStream(new MPG123Stream(), getFilesDir() + "/streamed.mp3");
+			playStream(new MPG123(), getFilesDir() + "/streamed.mp3");
 		}
 	};
-
-	private double hannWindow(float n, float N) {
-		return 0.5 * (1 - Math.cos(2 * Math.PI * n / (N-1)));
-	}
-	private int olaIndex(int index, int windowSize, int overlap) {
-		int overlapnum = index / (windowSize + overlap);
-		int extra = index - overlapnum * (windowSize + overlap);
-
-		// is it in the beginning section
-		int base = overlapnum * windowSize;
-		if (extra < windowSize - overlap)
-			return base + extra;
-		// it is in the overlap
-		int compressedoffset = extra - (windowSize - overlap);
-		return base + compressedoffset / 2;
-	}
-
-	/*
-	0       80   100   120        200   220   240          320
-	|--------|-----|-----|----------|-----|-----|------------|
-	|========|===========|==========|===========|============|
-	0       80         100        180         200          280
-	*/
 
 	private void playFromDecoder(IMediaDecoder decoder) {
 		_decoder = decoder;
@@ -92,7 +75,7 @@ public class MainActivity extends Activity {
 				rate * 2,
 				AudioTrack.MODE_STREAM);
 		_track.setPositionNotificationPeriod(rate);
-		_track.setPlaybackPositionUpdateListener(playbackPositionListener);
+		_track.setPlaybackPositionUpdateListener(_playbackPositionListener);
 		_track.play();
 		changeState("playing");
 
@@ -117,6 +100,7 @@ public class MainActivity extends Activity {
 			Log.e("mp3decoders", "InterruptedException", e);
 		} finally {
 			_decoder.close();
+			_decoder = null;
 			waitAndCloseTrack();
 		}
 
@@ -124,18 +108,26 @@ public class MainActivity extends Activity {
 	}
 
 	private void playStream(IMediaDecoder decoder, String filename) {
-		_decoder = _streamer = (MPG123Stream) decoder;
+		Feeder.clearDoneFiles();
+
+		_decoder = decoder;
+		_seekbase = 0;
 
 		Thread fakeStreamer = null;
-		Feeder feeder;
 		int rate;
 		int numChannels;
 
+		boolean isStreaming = filename != null;
+
 		try {
-			fakeStreamer = new Thread(_fakeStream, "fakeStreamer");
-			fakeStreamer.start();
-			feeder = new Feeder(filename);
-			feeder.start();
+			if (isStreaming) {
+				fakeStreamer = new Thread(_fakeStream, "fakeStreamer");
+				fakeStreamer.start();
+				_fullFeeder = _feeder = new Feeder(filename, decoder);
+
+				// keep the full decoder going for seeking
+				_fullDecoder = _decoder;
+			}
 
 			// find rate and numchannels - feed until there's enough data for it
 			rate = _decoder.getRate();
@@ -154,41 +146,51 @@ public class MainActivity extends Activity {
 					rate * 2,
 					AudioTrack.MODE_STREAM);
 			_track.setPositionNotificationPeriod(_decoder.getRate());
-			_track.setPlaybackPositionUpdateListener(playbackPositionListener);
+			_track.setPlaybackPositionUpdateListener(_playbackPositionListener);
 			_track.play();
 			changeState("playing");
 
-			streamSeekTo(feeder, rate, numChannels, 5f);
-
 			short[] pcm = new short[1000 * 5];
 			while (true) {
+				if (_seekTo >= 0) {
+					streamSeekTo(_seekTo);
+					_seekTo = -1;
+				}
+
 				if (_track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
 					Thread.sleep(50);
 					continue;
 				}
 
 				int samples = _decoder.readFrame(pcm);
-				if (samples == -1) {
+				if (samples == -1 && !_decoder.isStreamComplete()) {
 					Thread.sleep(50);
 					continue;
 				}
-				if (samples == 0)
+				if (samples == 0 || (samples == -1 && _decoder.isStreamComplete())) {
+					changeState("finished playing");
 					break;
-				if (samples > 0) {
-					_track.write(pcm, 0, samples);
-
-					if (_decoder.getPosition() > 6f)
-						streamSeekTo(feeder, rate, numChannels, 1f);
 				}
+				if (samples > 0)
+					_track.write(pcm, 0, samples);
 			}
 		} catch (InterruptedException e) {
 			Log.e("mp3decoders", "InterruptedException", e);
 		} catch (IOException e) {
 			Log.e("mp3decoders", "IOException", e);
+		} catch (Exception e) {
+			Log.e("mp3decoders", "Exception", e);
 		} finally {
-			_decoder.close();
 			waitAndCloseTrack();
 
+			if (_fullFeeder != null) {
+				_fullFeeder.finish();
+				_fullFeeder = null;
+			}
+			if (_feeder != null) {
+				_feeder.finish();
+				_feeder = null;
+			}
 			if (fakeStreamer != null) {
 				fakeStreamer.interrupt();
 				try {
@@ -198,33 +200,37 @@ public class MainActivity extends Activity {
 		}
 
 		Log.i("mp3decoders", "done loading audiotrack");
-		changeState("finished playing");
 	}
 
 	// trash the current track, seek, wait until seeking is done, then recreate the track
-	private void streamSeekTo(Feeder feeder, int rate, int numChannels, float seekToSeconds) throws InterruptedException {
+	private void streamSeekTo(float seekToSeconds) throws InterruptedException, FileNotFoundException {
+		boolean isStreaming = (_fullDecoder != null);
+
 		_track.pause();
 		_track.flush();
 		_track.release();
 		_track = null;
 
-		changeState("seeking to " + seekToSeconds + " seconds");
-		int offset = _streamer.getSeekFrameOffset(seekToSeconds);
-		while (offset == -1) {
-			boolean frameSkipped = true;
-			changeState("skipping frames while seeking to " + seekToSeconds + " seconds");
-			while (frameSkipped && offset == -1) {
-				frameSkipped = _decoder.skipFrame();
-				offset = _streamer.getSeekFrameOffset(seekToSeconds);
-			}
-			changeState("waiting for more bytes while seeking to " + seekToSeconds + " seconds");
-			Thread.sleep(50);
-		}
-		changeState("done seeking to " + seekToSeconds + " seconds");
-		_decoder.close();
+		int rate = _decoder.getRate();
+		int numChannels = _decoder.getNumChannels();
 
-		_decoder = _streamer = new MPG123Stream();
-		feeder.seekTo(offset);
+		if (isStreaming) {
+			long fileOffset = findSeekFileOffset(seekToSeconds);
+			if (fileOffset == -1) {
+				Log.e("mp3decoders", "unable to find target offset");
+				return;
+			}
+
+			// start a new decoder and feeder at the proper offset
+			_seekbase = seekToSeconds;
+			_decoder = new MPG123();
+			_feeder = new Feeder(_feeder.getFilename(), _decoder, fileOffset);
+
+			// continue the original decoder to get later seek offsets
+			_fullSkipper = new StreamSkipper(_fullDecoder);
+		} else {
+			_decoder.seek(seekToSeconds);
+		}
 
 		_track = new AudioTrack(AudioManager.STREAM_MUSIC,
 				rate,
@@ -233,21 +239,40 @@ public class MainActivity extends Activity {
 				rate * 2,
 				AudioTrack.MODE_STREAM);
 		_track.setPositionNotificationPeriod(rate);
-		_track.setPlaybackPositionUpdateListener(playbackPositionListener);
+		_track.setPlaybackPositionUpdateListener(_playbackPositionListener);
 		_track.play();
 	}
 
-	boolean _doneFeeding = false;
+	private long findSeekFileOffset(float seekToSeconds) throws InterruptedException {
+		long fileOffset = _fullDecoder.getSeekFrameOffset(seekToSeconds);
+		// keep trying to skip frame until offset is found or out of data
+		while (fileOffset == -1) {
+			boolean skippedFrame = _fullDecoder.skipFrame();
+			if (skippedFrame) {
+				fileOffset = _fullDecoder.getSeekFrameOffset(seekToSeconds);
+				continue;
+			}
+
+			// check for out of data
+			if (_fullDecoder.isStreamComplete())
+				break;
+			// sleep to wait for more data
+			Thread.sleep(50);
+		}
+		return fileOffset;
+	}
+
 	Runnable _fakeStream = new Runnable() {
 		@Override
 		public void run() {
 			InputStream inStream = null;
 			OutputStream outStream = null;
 			try {
-				_doneFeeding = false;
 				File out = new File(getFilesDir() + "/streamed.mp3");
 				if (out.exists())
+					//noinspection ResultOfMethodCallIgnored
 					out.delete();
+				//noinspection ResultOfMethodCallIgnored
 				out.createNewFile();
 				File in = new File(getFilesDir() + "/loop1.mp3");
 
@@ -261,12 +286,29 @@ public class MainActivity extends Activity {
 					outStream.flush();
 					total += read;
 					changeState2("downloaded " + total + " bytes");
-					Thread.sleep(1000);
+
+					// sleep for 1000 downloads slightly slower than realtime
+					int sleepdelay;
+					RadioGroup speedGroup = (RadioGroup) findViewById(R.id.streamSpeed);
+					switch (speedGroup.getCheckedRadioButtonId()) {
+						case R.id.streamRealtime: sleepdelay = 250; break;
+						case R.id.streamSlow: sleepdelay = 1000; break;
+						case R.id.streamVerySlow: sleepdelay = 1500; break;
+						default: sleepdelay = 250; break;
+					}
+					Thread.sleep(sleepdelay);
+				}
+
+				Feeder.doneStreamingFile(out.getAbsolutePath());
+
+				if (_fullFeeder != _feeder) {
+					_fullFeeder.finish();
+					_fullFeeder = null;
+					_fullDecoder.completeStream();
 				}
 			} catch (IOException | InterruptedException e) {
 				Log.e("mp3decoders", "cannot stream file", e);
 			} finally {
-				_doneFeeding = true;
 				try {
 					if (inStream != null)
 						inStream.close();
@@ -284,82 +326,6 @@ public class MainActivity extends Activity {
 		}
 	};
 
-	// pipes data from a file to the parent class's stream
-	public class Feeder {
-		Thread _feederThread = null;
-		String _filename;
-		long _seekToOffset = -1;
-
-		public Feeder(String filename) throws FileNotFoundException {
-			_filename = filename;
-			_feederThread = new Thread(_feederRunnable, "feeder");
-		}
-		public void start() { _feederThread.start(); }
-		public void seekTo(long offset) {
-			_seekToOffset = offset;
-			if (!_feederThread.isAlive()) {
-				_feederThread = new Thread(_feederRunnable, "streamer");
-				_feederThread.start();
-			}
-		}
-
-		Runnable _feederRunnable = new Runnable() {
-			@Override
-			public void run() {
-				long filePosition = 0;
-				RandomAccessFile file = null;
-				try {
-					while (true) {
-						// make sure the file exists
-						if (!new File(_filename).exists()) {
-							Thread.sleep(50);
-							continue;
-						}
-
-						file = new RandomAccessFile(_filename, "r");
-						file.seek(filePosition);
-
-						// attempt to seek to the proper place
-						// if we're not there, wait for more data and try again
-						while (_seekToOffset != -1) {
-							file.seek(_seekToOffset);
-							if (file.getFilePointer() == _seekToOffset)
-								_seekToOffset = -1;
-							Thread.sleep(50);
-						}
-
-						// read the available bytes from the file and feed them to the mp3 decoder
-						int size = (int) (file.length() - file.getFilePointer());
-						byte[] c = new byte[size];
-						int read = file.read(c);
-						if (read > 0) {
-							_streamer.feed(c, read);
-							changeState3("feed decoder up to " + file.getFilePointer() + " bytes");
-						}
-						else if (read == -1 && _doneFeeding)
-							break;
-
-						// save the position so we can jump back here when we reopen it
-						filePosition = file.getFilePointer();
-						file.close();
-
-						//changeState(String.format("at %d bytes, %f seconds", _furthestRead, _streamer.getPosition()));
-						Thread.sleep(50);
-					}
-				} catch (IOException | InterruptedException e) {
-					Log.e("mp3decoders", "unable to feed decoder", e);
-				} finally {
-					try {
-						if (file != null)
-							file.close();
-					} catch (IOException e) {
-						Log.e("mp3decoders", "unable to close feed decoder file", e);
-					}
-				}
-			}
-		};
-	}
-
 	private void waitAndCloseTrack() {
 		if (_track != null) {
 			try {
@@ -372,11 +338,25 @@ public class MainActivity extends Activity {
 
 			_track.release();
 			_track = null;
+		}
+
+		if (_decoder != null) {
+			_decoder.close();
 			_decoder = null;
+		}
+
+		if (_fullDecoder != null) {
+			_fullDecoder.close();
+			_fullDecoder = null;
+		}
+
+		if (_fullSkipper != null) {
+			_fullSkipper.close();
+			_fullSkipper = null;
 		}
 	}
 
-	private AudioTrack.OnPlaybackPositionUpdateListener playbackPositionListener = new AudioTrack.OnPlaybackPositionUpdateListener() {
+	private AudioTrack.OnPlaybackPositionUpdateListener _playbackPositionListener = new AudioTrack.OnPlaybackPositionUpdateListener() {
 		@Override
 		public void onMarkerReached(AudioTrack audioTrack) {
 			changeState("marker reached");
@@ -386,7 +366,7 @@ public class MainActivity extends Activity {
 		public void onPeriodicNotification(AudioTrack audioTrack) {
 			if (_decoder != null)
 				changeState(String.format("periodic notification at %.2f, head position %d",
-						_decoder.getPosition(), audioTrack.getPlaybackHeadPosition()));
+						_decoder.getPosition() + _seekbase, audioTrack.getPlaybackHeadPosition()));
 			else
 				changeState("periodic notification at " + audioTrack.getPlaybackHeadPosition());
 		}
@@ -429,15 +409,6 @@ public class MainActivity extends Activity {
 		});
 	}
 
-	private void changeState3(final CharSequence playerState) {
-		this.runOnUiThread(new Runnable() {
-			@Override
-			public void run() {
-				_state3Text.setText(playerState);
-			}
-		});
-	}
-
 	private View.OnClickListener pauseHandler = new View.OnClickListener() {
 		@Override
 		public void onClick(View view) {
@@ -459,7 +430,7 @@ public class MainActivity extends Activity {
 
 			if (!requestAudioFocus())
 				return;
-			new Thread(mpg123StreamRunnable).start();
+			new Thread(mpg123StreamRunnable, "mpg123-streamer").start();
 			Log.i("mp3decoders", "started MPG123 Stream thread");
 		}
 	};
@@ -475,7 +446,7 @@ public class MainActivity extends Activity {
 
 			if (!requestAudioFocus())
 				return;
-			new Thread(mpg123Runnable).start();
+			new Thread(mpg123Runnable, "mpg123").start();
 			Log.i("mp3decoders", "started MPG123 thread");
 		}
 	};
@@ -491,7 +462,7 @@ public class MainActivity extends Activity {
 
 			if (!requestAudioFocus())
 				return;
-			new Thread(vorbisRunnable).start();
+			new Thread(vorbisRunnable, "vorbis").start();
 			Log.i("mp3decoders", "started Vorbis thread");
 		}
 	};
@@ -521,12 +492,13 @@ public class MainActivity extends Activity {
 		findViewById(R.id.pause).setOnClickListener(pauseHandler);
 		_stateText = (TextView) findViewById(R.id.state);
 		_state2Text = (TextView) findViewById(R.id.state2);
-		_state3Text = (TextView) findViewById(R.id.state3);
 		changeState("init");
 
 		try {
 			File streamedFile = new File(getFilesDir() + "/streamed.mp3");
+			//noinspection ResultOfMethodCallIgnored
 			streamedFile.delete();
+			//noinspection ResultOfMethodCallIgnored
 			streamedFile.createNewFile();
 		} catch (IOException e) {
 			Log.e("mp3decoders", "unable to recreate streamed file", e);

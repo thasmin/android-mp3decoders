@@ -9,4 +9,11 @@ public interface IMediaDecoder {
 	int getNumChannels();
 	int getRate();
 	float getDuration();
+
+	// for streaming
+	public int getSeekFrameOffset(float position);
+	public void feed(byte[] buffer, int count);
+	public void completeStream();
+	public boolean isStreamComplete();
+
 }

@@ -17,7 +17,7 @@ typedef struct
 
 static char buffer[10000];
 
-JNIEXPORT jlong JNICALL Java_com_axelby_podax_player_Vorbis_openFile
+JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_Vorbis_openFile
 		(JNIEnv* env, jclass c, jstring obj_filename) {
 	OggVorbis_File* ogg = (OggVorbis_File*) malloc(sizeof(OggVorbis_File));
 
@@ -53,67 +53,62 @@ JNIEXPORT jlong JNICALL Java_com_axelby_podax_player_Vorbis_openFile
 	return (jlong)oggFile;	
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_podax_player_Vorbis_getNumChannels
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_Vorbis_getNumChannels
 		(JNIEnv* env, jclass c, jlong handle) {
 	OggFile* file = (OggFile*)handle;
 	return file->channels;
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_podax_player_Vorbis_getRate
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_Vorbis_getRate
 		(JNIEnv* env, jclass c, jlong handle) {
 	OggFile* file = (OggFile*)handle;
 	return file->rate;
 }
 
-JNIEXPORT jfloat JNICALL Java_com_axelby_podax_player_Vorbis_getDuration
+JNIEXPORT jfloat JNICALL Java_com_axelby_mp3decoders_Vorbis_getDuration
 		(JNIEnv* env, jclass c, jlong handle) {
 	OggFile* file = (OggFile*)handle;
 	return file->length;
 }
 
-JNIEXPORT jlong JNICALL Java_com_axelby_podax_player_Vorbis_getRawLength
+JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_Vorbis_getRawLength
 		(JNIEnv* env, jclass c, jlong handle) {
 	OggFile* file = (OggFile*)handle;
 	return ov_raw_total(file->ogg, -1);
 }
 
-JNIEXPORT jlong JNICALL Java_com_axelby_podax_player_Vorbis_getPCMLength
+JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_Vorbis_getPCMLength
 		(JNIEnv* env, jclass c, jlong handle) {
 	OggFile* file = (OggFile*)handle;
 	return ov_pcm_total(file->ogg, -1);
 }
 
-JNIEXPORT jlong JNICALL Java_com_axelby_podax_player_Vorbis_getTimeLength
+JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_Vorbis_getTimeLength
 		(JNIEnv* env, jclass c, jlong handle) {
 	OggFile* file = (OggFile*)handle;
 	return ov_time_total(file->ogg, -1);
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_podax_player_Vorbis_readSamples
-		(JNIEnv* env, jclass c, jlong handle, jshortArray obj_samples, jint offset, jint numSamples) {
+// no way to limit reading to one frame
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_Vorbis_readFrame
+		(JNIEnv* env, jclass c, jlong handle, jshortArray obj_samples) {
 	short* samples = (short*)(*env)->GetPrimitiveArrayCritical(env, obj_samples, 0);
+	int sample_count = (*env)->GetArrayLength(env, obj_samples) * 2;
 
 	OggFile* file = (OggFile*)handle;
-	int toRead = 2 * numSamples;
-	int read = 0;
+	int ret = ov_read(file->ogg, (char*)samples, sample_count, &file->bitstream);
 
-	samples += offset;
-
-	while (read != toRead)
-	{
-		int ret = ov_read(file->ogg, (char*)samples + read, toRead - read, &file->bitstream);
-		if (ret == OV_HOLE)
-			continue;
-		if (ret == OV_EBADLINK || ret == OV_EINVAL || ret == 0)
-			break;
-		read+=ret;
-	}
+	while (ret == OV_HOLE)
+		ret = ov_read(file->ogg, (char*)samples, sample_count, &file->bitstream);
+	// any other error means stop reading
+	if (ret < 0)
+		ret = 0;
 
 	(*env)->ReleasePrimitiveArrayCritical(env, obj_samples, samples, 0);
-	return read / 2;
+	return ret / 2;
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_podax_player_Vorbis_skipSamples
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_Vorbis_skipSamples
 		(JNIEnv* env, jclass c, jlong handle, jint numSamples) {
 	OggFile* file = (OggFile*)handle;
 	int toRead = 2 * numSamples;
@@ -132,7 +127,7 @@ JNIEXPORT jint JNICALL Java_com_axelby_podax_player_Vorbis_skipSamples
 	return read / 2;
 }
 
-JNIEXPORT void JNICALL Java_com_axelby_podax_player_Vorbis_delete
+JNIEXPORT void JNICALL Java_com_axelby_mp3decoders_Vorbis_delete
 		(JNIEnv* env, jclass c, jlong handle) {
 	OggFile* file = (OggFile*)handle;
 	ov_clear(file->ogg);
@@ -140,26 +135,26 @@ JNIEXPORT void JNICALL Java_com_axelby_podax_player_Vorbis_delete
 	free(file);
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_podax_player_Vorbis_isSeekable
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_Vorbis_isSeekable
 		(JNIEnv* env, jclass c, jlong handle) {
 	OggFile* file = (OggFile*)handle;
 	return file->ogg->seekable;
 }
 
-JNIEXPORT jfloat JNICALL Java_com_axelby_podax_player_Vorbis_getPosition
+JNIEXPORT jfloat JNICALL Java_com_axelby_mp3decoders_Vorbis_getPosition
 		(JNIEnv* env, jclass c, jlong handle) {
 	OggFile* file = (OggFile*)handle;
 	return 0.001f * (float)ov_time_tell(file->ogg);
 }
 
-JNIEXPORT jint JNICALL Java_com_axelby_podax_player_Vorbis_seek
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_Vorbis_seek
 		(JNIEnv* env, jclass c, jlong handle, jfloat time) {
 	OggFile* file = (OggFile*)handle;
 	return ov_time_seek(file->ogg, (ogg_int64_t)(time * 1000.f));
 }
 
 /*
-JNIEXPORT jint JNICALL Java_com_axelby_podax_player_Vorbis_openStream
+JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_Vorbis_openStream
 		(JNIEnv *env, jclass c, jbyteArray bytes)
 {
 	ogg_sync_state ogg_sync;

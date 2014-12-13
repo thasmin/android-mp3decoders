@@ -42,6 +42,8 @@ int mp3file_determineStats(MP3File *mp3) {
 	int encoding;
 	mpg123_handle* mh = mp3->handle;
 	int err = mpg123_getformat(mh, &mp3->rate, &mp3->channels, &encoding);
+	if (err == MPG123_NEED_MORE)
+		return err;
 	if (err != MPG123_OK) {
 		printerr("mpg123_getformat", err);
 		return err;
@@ -121,7 +123,7 @@ JNIEXPORT void JNICALL Java_com_axelby_mp3decoders_MPG123_feed
 		if (err == MPG123_NEW_FORMAT) {
 			int encoding;
 			err = mpg123_getformat(mh, &mp3->rate, &mp3->channels, &encoding);
-			if (err != MPG123_OK) {
+			if (err != MPG123_NEED_MORE && err != MPG123_OK) {
 				printerr("mpg123_getformat", err);
 				return;
 			}
@@ -149,7 +151,6 @@ JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_MPG123_openFile
 		return 0;
 	}
 
-__android_log_write(ANDROID_LOG_INFO, "podax-jni", "created handle");
 	MP3File* mp3 = mp3file_init(mh);
 	const char* fileString = (*env)->GetStringUTFChars(env, filename, NULL);
 	err = mpg123_open(mh, fileString);
@@ -160,8 +161,9 @@ __android_log_write(ANDROID_LOG_INFO, "podax-jni", "created handle");
 		mp3file_delete(mp3);
 		return err;
 	}
-__android_log_write(ANDROID_LOG_INFO, "podax-jni", "opened file");
 
+	// in podax, remove next line and uncomment block
+	mpg123_scan(mh);
 	/*
 	char* index_fn = calloc(1, strlen(fileString) + 6 + 1);
 	strcpy(index_fn, fileString);
@@ -198,7 +200,6 @@ __android_log_write(ANDROID_LOG_INFO, "podax-jni", "opened file");
 
 	// determine format and length
 	mp3file_determineStats(mp3);
-__android_log_write(ANDROID_LOG_INFO, "podax-jni", "determined stats");
 	return (jlong)mp3;
 }
 
@@ -255,7 +256,7 @@ JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_seek
 {
     MP3File *mp3 = (MP3File *)handle;
     int err = mpg123_seek_frame(mp3->handle, (int) (seconds / mp3->secs_per_frame), SEEK_SET);
-	if (err != MPG123_OK)
+	if (err < 0)
 		printerr("mpg123_seek_frame", err);
 	return err;
 }
@@ -306,28 +307,6 @@ JNIEXPORT jdouble JNICALL Java_com_axelby_mp3decoders_MPG123_getSecondsPerFrame
     return mp3->secs_per_frame;
 }
 
-JNIEXPORT jlong JNICALL Java_com_axelby_mp3decoders_MPG123_getOutputBlockSize
-	(JNIEnv *env, jclass c, jlong handle)
-{
-    MP3File *mp3 = (MP3File *)handle;
-	return mpg123_outblock(mp3->handle);
-}
-
-JNIEXPORT jintArray JNICALL Java_com_axelby_mp3decoders_MPG123_getSupportedRates
-	(JNIEnv *env, jclass c)
-{
-	const long *list;
-	size_t i, number;
-
-	mpg123_rates(&list, &number);
-	jintArray result = (*env)->NewIntArray(env, number);
-	jint *resultData = (jint *)(*env)->GetPrimitiveArrayCritical(env, result, 0);
-	for (i = 0; i < number; i++)
-		resultData[i] = list[i];
-	(*env)->ReleasePrimitiveArrayCritical(env, result, resultData, 0);
-	return result;
-}
-
 JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_getSeekFrameOffset
 	(JNIEnv *env, jclass c, jlong mp3file, jfloat seconds)
 {
@@ -342,84 +321,8 @@ JNIEXPORT jint JNICALL Java_com_axelby_mp3decoders_MPG123_getSeekFrameOffset
 	int target_frame = (int) (seconds / mp3->secs_per_frame); // the frame number to seek to
 	int target_index = target_frame / step; // the closest index to the target frame
 	// say so if there aren't enough entries in the index
-	if (target_index > fill)
+	if (target_index >= fill)
 		return -1;
 	return offsets[target_index];
-}
-
-JNIEXPORT void JNICALL Java_com_axelby_mp3decoders_MPG123_testStream(JNIEnv *env, jclass c) {
-	int err = mpg123_init();
-	if (err != MPG123_OK) {
-		printerr("mpg123_init", err);
-		return;
-	}
-
-	// init mpg123 handle
-    mpg123_handle *mh = mpg123_new(NULL, &err);
-	if (err != MPG123_OK) {
-		printerr("mpg123_new", err);
-		return;
-	}
-
-	// set handle up as stream
-	err = mpg123_open_feed(mh);
-	if (err != MPG123_OK) {
-		printerr("mpg123_open_feed", err);
-		return;
-	}
-
-	FILE* f = fopen("/data/data/com.axelby.mp3decoders/files/loop1.mp3", "rb");
-	unsigned char cs[1000];
-	size_t size = sizeof(cs);
-	fread(cs, sizeof(unsigned char), size, f);
-	size_t total_size = size;
-
-	err = mpg123_feed(mh, cs, size);
-	if (err != MPG123_OK) {
-		printerr("mpg123_feed", err);
-		return;
-	}
-
-	off_t frame_offset;
-	unsigned char* audio;
-	size_t bytes_done;
-	err = mpg123_decode_frame(mh, &frame_offset, &audio, &bytes_done);
-	while (err == MPG123_NEED_MORE) {
-		fread(cs, sizeof(unsigned char), size, f);
-		total_size += size;
-		__android_log_print(ANDROID_LOG_ERROR, "podax-jni", "feeding more data: %d", total_size);
-		err = mpg123_feed(mh, cs, size);
-		if (err != MPG123_OK) {
-			printerr("mpg123_feed", err);
-			return;
-		}
-		err = mpg123_decode_frame(mh, &frame_offset, &audio, &bytes_done);
-	}
-
-	long rate;
-	int channels;
-	int encoding;
-	if (err == MPG123_NEW_FORMAT) {
-		err = mpg123_getformat(mh, &rate, &channels, &encoding);
-		if (err != MPG123_OK) {
-			printerr("mpg123_getformat", err);
-			return;
-		}
-		printf("rate: %ld, channels: %d, encoding: %d\n", rate, channels, encoding);
-	}
-
-	if (err != MPG123_OK) {
-		printerr("mpg123_decode_frame", err);
-		return;
-	}
-
-	int num_samples = mpg123_length(mh);
-	int samples_per_frame = mpg123_spf(mh);
-	int secs_per_frame = mpg123_tpf(mh);
-	__android_log_print(ANDROID_LOG_ERROR, "podax-jni", "num_samples: %d, samples_per_frame: %d, secs_per_frame: %d", num_samples, samples_per_frame, secs_per_frame);
-
-	fclose(f);
-	mpg123_close(mh);
-	mpg123_delete(mh);
 }
 

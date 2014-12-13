@@ -21,11 +21,6 @@
         android:layout_height="wrap_content"
         android:id="@+id/state2"/>
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:id="@+id/state3"/>
-
     <Button
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -66,4 +61,32 @@
         android:text="Skip to 6s"
         android:id="@+id/skip6s"/>
 
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:text="Streaming Speed:"/>
+
+    <RadioGroup
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:id="@+id/streamSpeed"
+        android:orientation="horizontal">
+        <RadioButton
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="realtime"
+            android:checked="true"
+            android:id="@+id/streamRealtime"/>
+        <RadioButton
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="slowly"
+            android:id="@+id/streamSlow"/>
+        <RadioButton
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="very slowly"
+            android:id="@+id/streamVerySlow"/>
+    </RadioGroup>
 </LinearLayout>
