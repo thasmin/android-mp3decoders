@@ -1,11 +1,11 @@
-apply plugin: 'android'
+apply plugin: 'com.android.application'
 
 android {
-    compileSdkVersion 21
-    buildToolsVersion "21.1.1"
+    compileSdkVersion 22
+    buildToolsVersion "22.0.1"
     defaultConfig {
-        minSdkVersion 15
-        targetSdkVersion 21
+        minSdkVersion 16
+        targetSdkVersion 22
         versionCode 1
         versionName "1.0"
     }
@@ -15,15 +15,11 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.txt'
         }
     }
+
     /* preferably use the ndkbuild step of gradle but it doesn't work */
     sourceSets.main {
         jni.srcDirs = []
         jniLibs.srcDir 'src/main/libs'
     }
-    productFlavors {
-    }
 }
 
-dependencies {
-    compile fileTree(dir: 'libs', include: ['*.jar'])
-}

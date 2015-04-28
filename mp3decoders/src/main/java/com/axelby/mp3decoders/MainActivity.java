@@ -5,6 +5,9 @@ import android.content.Context;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
+import android.media.MediaCodec;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
@@ -18,6 +21,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 
 public class MainActivity extends Activity {
 	private TextView _stateText;
@@ -26,10 +30,10 @@ public class MainActivity extends Activity {
 	private float _seekTo = -1f;
 	private float _seekbase = 0;
 	private AudioTrack _track = null;
-	private Feeder _feeder = null;
+	private StreamFeeder _feeder = null;
 	private IMediaDecoder _decoder;
 
-	private Feeder _fullFeeder = null;
+	private StreamFeeder _fullFeeder = null;
 	private IMediaDecoder _fullDecoder;
 	private StreamSkipper _fullSkipper;
 
@@ -108,7 +112,7 @@ public class MainActivity extends Activity {
 	}
 
 	private void playStream(IMediaDecoder decoder, String filename) {
-		Feeder.clearDoneFiles();
+		StreamFeeder.clearDoneFiles();
 
 		_decoder = decoder;
 		_seekbase = 0;
@@ -123,7 +127,7 @@ public class MainActivity extends Activity {
 			if (isStreaming) {
 				fakeStreamer = new Thread(_fakeStream, "fakeStreamer");
 				fakeStreamer.start();
-				_fullFeeder = _feeder = new Feeder(filename, decoder);
+				_fullFeeder = _feeder = new StreamFeeder(filename, decoder);
 
 				// keep the full decoder going for seeking
 				_fullDecoder = _decoder;
@@ -224,7 +228,7 @@ public class MainActivity extends Activity {
 			// start a new decoder and feeder at the proper offset
 			_seekbase = seekToSeconds;
 			_decoder = new MPG123();
-			_feeder = new Feeder(_feeder.getFilename(), _decoder, fileOffset);
+			_feeder = new StreamFeeder(_feeder.getFilename(), _decoder, fileOffset);
 
 			// continue the original decoder to get later seek offsets
 			_fullSkipper = new StreamSkipper(_fullDecoder);
@@ -299,7 +303,7 @@ public class MainActivity extends Activity {
 					Thread.sleep(sleepdelay);
 				}
 
-				Feeder.doneStreamingFile(out.getAbsolutePath());
+				StreamFeeder.doneStreamingFile(out.getAbsolutePath());
 
 				if (_fullFeeder != _feeder) {
 					_fullFeeder.finish();
@@ -412,22 +416,158 @@ public class MainActivity extends Activity {
 	private View.OnClickListener pauseHandler = new View.OnClickListener() {
 		@Override
 		public void onClick(View view) {
-			if (_track != null) {
-				_track.pause();
+			if (_track == null)
+				return;
+
+			if (_track.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) {
 				Log.i("mp3decoders", "paused");
+				_track.pause();
+			} else if (_track.getPlayState() == AudioTrack.PLAYSTATE_PAUSED) {
+				Log.i("mp3decoders", "resumed");
+				_track.play();
 			}
+		}
+	};
+
+	private Runnable mediaDecoderRunnable = new Runnable() {
+		@Override
+		public void run() {
+			try {
+				MediaExtractor extractor = new MediaExtractor();
+				extractor.setDataSource(getFilesDir() + "/loop1.mp3");
+
+				MediaFormat format = extractor.getTrackFormat(0);
+				String mime = format.getString(MediaFormat.KEY_MIME);
+				int sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE);
+				int numChannels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
+
+				Log.i("mp3decoders", "mime type: " + mime);
+				Log.i("mp3decoders", "sample rate: " + sampleRate);
+				Log.i("mp3decoders", "num channels: " + numChannels);
+
+				MediaCodec decoder = MediaCodec.createDecoderByType(mime);
+				decoder.configure(format, null, null, 0);
+				decoder.start();
+				changeState("setup mediadecoder");;
+
+				ByteBuffer[] inputBuffers = decoder.getInputBuffers();
+				ByteBuffer[] outputBuffers = decoder.getOutputBuffers();
+
+				extractor.selectTrack(0);
+
+				_track = new AudioTrack(AudioManager.STREAM_MUSIC,
+						sampleRate,
+						numChannels == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO,
+						AudioFormat.ENCODING_PCM_16BIT,
+						sampleRate * 2,
+						AudioTrack.MODE_STREAM);
+				_track.setPositionNotificationPeriod(sampleRate);
+				_track.setPlaybackPositionUpdateListener(_playbackPositionListener);
+				_track.play();
+				changeState("audiotrack setup");
+
+				final int TIMEOUT_US = 10000;
+				MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+				boolean inEos = false;
+				while (!Thread.interrupted()) {
+					if (_seekTo != -1f) {
+						_track.pause();
+						_track.flush();
+						decoder.flush();
+						final int IN_MICROSECONDS = 1000000;
+						extractor.seekTo((int)(_seekTo * IN_MICROSECONDS), MediaExtractor.SEEK_TO_CLOSEST_SYNC);
+						_seekTo = -1f;
+						_track.play();
+					}
+
+					// input buffers will fill up if decoding while paused
+					if (!inEos && _track.getPlayState() != AudioTrack.PLAYSTATE_PAUSED) {
+						int inIndex = decoder.dequeueInputBuffer(TIMEOUT_US);
+						if (inIndex >= 0) {
+							ByteBuffer buffer = inputBuffers[inIndex];
+							int sampleSize = extractor.readSampleData(buffer, 0);
+							if (sampleSize < 0) {
+								Log.d("DecodeActivity", "inEOS");
+								decoder.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+								inEos = true;
+							} else {
+								decoder.queueInputBuffer(inIndex, 0, sampleSize, extractor.getSampleTime(), 0);
+								extractor.advance();
+							}
+						}
+					}
+
+					int outIndex = decoder.dequeueOutputBuffer(info, TIMEOUT_US);
+					if (outIndex > 0) {
+						ByteBuffer buf = outputBuffers[outIndex];
+						//_track.write(buf, info.size, AudioTrack.WRITE_BLOCKING);
+
+						final byte[] chunk = new byte[info.size];
+						buf.get(chunk);
+						buf.clear();
+						_track.write(chunk, 0, chunk.length);
+
+						decoder.releaseOutputBuffer(outIndex, false);
+					} else if (outIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
+						changeState("INFO_OUTPUT_BUFFERS_CHANGED");
+						outputBuffers = decoder.getOutputBuffers();
+					} else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+						MediaFormat newFormat = decoder.getOutputFormat();
+						changeState("New format " + newFormat);
+						_track.setPlaybackRate(newFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE));
+					}
+
+					if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+						Log.d("mp3decoders", "outEOS");
+						break;
+					}
+				}
+
+				changeState("done playing");
+				decoder.stop();
+				decoder.release();
+				extractor.release();
+
+			} catch (IOException e) {
+				e.printStackTrace();
+			} finally {
+
+				if (_track != null) {
+					try {
+						_track.stop();
+						while (_track.getPlaybackHeadPosition() != 0)
+							Thread.sleep(10);
+					} catch (InterruptedException e) {
+						Log.e("mp3decoders", "InterruptedException", e);
+					}
+					_track.release();
+					_track = null;
+				}
+
+			}
+		}
+	};
+
+	private View.OnClickListener playMediaDecoderHandler = new View.OnClickListener() {
+		@Override
+		public void onClick(View view) {
+			if (!requestAudioFocus())
+				return;
+			new Thread(mediaDecoderRunnable, "mediaDecoder").start();
+			Log.i("mp3decoders", "started media decoder thread");
+		}
+	};
+
+	private View.OnClickListener playNativeHandler = new View.OnClickListener() {
+		@Override
+		public void onClick(View view) {
+			Native.init();
 		}
 	};
 
 	private View.OnClickListener playMPG123StreamHandler = new View.OnClickListener() {
 		@Override
 		public void onClick(View view) {
-			if (_track != null) {
-				_track.play();
-				Log.i("mp3decoders", "resumed");
-				return;
-			}
-
 			if (!requestAudioFocus())
 				return;
 			new Thread(mpg123StreamRunnable, "mpg123-streamer").start();
@@ -438,12 +578,6 @@ public class MainActivity extends Activity {
 	private View.OnClickListener playMPG123Handler = new View.OnClickListener() {
 		@Override
 		public void onClick(View view) {
-			if (_track != null) {
-				_track.play();
-				Log.i("mp3decoders", "resumed");
-				return;
-			}
-
 			if (!requestAudioFocus())
 				return;
 			new Thread(mpg123Runnable, "mpg123").start();
@@ -454,12 +588,6 @@ public class MainActivity extends Activity {
 	private View.OnClickListener playVorbisHandler = new View.OnClickListener() {
 		@Override
 		public void onClick(View view) {
-			if (_track != null) {
-				_track.play();
-				Log.i("mp3decoders", "resumed");
-				return;
-			}
-
 			if (!requestAudioFocus())
 				return;
 			new Thread(vorbisRunnable, "vorbis").start();
@@ -484,6 +612,8 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+		findViewById(R.id.playMediaDecoder).setOnClickListener(playMediaDecoderHandler);
+		findViewById(R.id.playNative).setOnClickListener(playNativeHandler);
 		findViewById(R.id.playMPG123Stream).setOnClickListener(playMPG123StreamHandler);
 		findViewById(R.id.playMPG123).setOnClickListener(playMPG123Handler);
 		findViewById(R.id.playVorbis).setOnClickListener(playVorbisHandler);

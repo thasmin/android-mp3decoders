@@ -11,7 +11,7 @@ import java.util.ArrayList;
 /**
 * pipes data from a file to the decoder
 */
-public class Feeder {
+public class StreamFeeder {
 	final String _filename;
 	final IMediaDecoder _decoder;
 
@@ -22,11 +22,11 @@ public class Feeder {
 	public static void doneStreamingFile(String filename) { if (!_doneFiles.contains(filename)) _doneFiles.add(filename); }
 	public static void clearDoneFiles() { _doneFiles.clear(); }
 	
-	public Feeder(String filename, IMediaDecoder decoder) throws FileNotFoundException {
+	public StreamFeeder(String filename, IMediaDecoder decoder) throws FileNotFoundException {
 		this(filename, decoder, 0);
 	}
 
-	public Feeder(String filename, IMediaDecoder decoder, long initialOffset) throws FileNotFoundException {
+	public StreamFeeder(String filename, IMediaDecoder decoder, long initialOffset) throws FileNotFoundException {
 		_filename = filename;
 		_decoder = decoder;
 		_fileOffset = initialOffset;

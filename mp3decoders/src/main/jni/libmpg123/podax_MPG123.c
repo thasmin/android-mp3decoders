@@ -297,6 +297,8 @@ JNIEXPORT jfloat JNICALL Java_com_axelby_mp3decoders_MPG123_getDuration
 	(JNIEnv *env, jclass c, jlong handle)
 {
     MP3File *mp3 = (MP3File *)handle;
+	if (mp3->duration == 0)
+		mp3file_determineStats(mp3);
     return mp3->duration;
 }
 

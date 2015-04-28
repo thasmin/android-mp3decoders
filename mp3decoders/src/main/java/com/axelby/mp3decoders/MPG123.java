@@ -1,17 +1,9 @@
 package com.axelby.mp3decoders;
 
 public class MPG123 implements IMediaDecoder {
-	static boolean _initted = false;
 	static {
-		MPG123.initializeLibrary();
-	}
-
-	public static void initializeLibrary() {
-		if (!_initted) {
-			System.loadLibrary("mpg123");
-			MPG123.init();
-			_initted = true;
-		}
+		System.loadLibrary("mpg123");
+		MPG123.init();
 	}
 
 	protected static native int init();

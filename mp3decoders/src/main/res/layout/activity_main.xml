@@ -24,6 +24,20 @@
     <Button
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:text="Play with Media Decoder"
+        android:id="@+id/playMediaDecoder"
+        />
+
+    <Button
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Play from Native"
+        android:id="@+id/playNative"
+        />
+
+    <Button
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:text="Play as MPG123 Stream"
         android:id="@+id/playMPG123Stream"
         />
@@ -45,7 +59,7 @@
     <Button
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Pause"
+        android:text="Pause / Resume"
         android:id="@+id/pause"
         />
 
