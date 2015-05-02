@@ -75,6 +75,12 @@
         android:text="Skip to 6s"
         android:id="@+id/skip6s"/>
 
+    <Button
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Skip Past End"
+        android:id="@+id/skipPastEnd"/>
+
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

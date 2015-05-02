@@ -45,6 +45,10 @@ public class MainActivity extends Activity {
 		@Override public void onClick(View view) { _seekTo = 6f; }
 	};
 
+	private View.OnClickListener skipPastEndHandler = new View.OnClickListener() {
+		@Override public void onClick(View view) { _seekTo = 20f; }
+	};
+
 	private Runnable vorbisRunnable = new Runnable() {
 		@Override
 		public void run() {
@@ -291,16 +295,7 @@ public class MainActivity extends Activity {
 					total += read;
 					changeState2("downloaded " + total + " bytes");
 
-					// sleep for 1000 downloads slightly slower than realtime
-					int sleepdelay;
-					RadioGroup speedGroup = (RadioGroup) findViewById(R.id.streamSpeed);
-					switch (speedGroup.getCheckedRadioButtonId()) {
-						case R.id.streamRealtime: sleepdelay = 250; break;
-						case R.id.streamSlow: sleepdelay = 1000; break;
-						case R.id.streamVerySlow: sleepdelay = 1500; break;
-						default: sleepdelay = 250; break;
-					}
-					Thread.sleep(sleepdelay);
+					Thread.sleep(getStreamSpeedDelay());
 				}
 
 				StreamFeeder.doneStreamingFile(out.getAbsolutePath());
@@ -329,6 +324,17 @@ public class MainActivity extends Activity {
 			}
 		}
 	};
+
+	// sleep for 1000 downloads slightly slower than realtime
+	private int getStreamSpeedDelay() {
+		RadioGroup speedGroup = (RadioGroup) findViewById(R.id.streamSpeed);
+		switch (speedGroup.getCheckedRadioButtonId()) {
+			case R.id.streamRealtime: return 250;
+			case R.id.streamSlow: return 1000;
+			case R.id.streamVerySlow: return 1500;
+			default: return 250;
+		}
+	}
 
 	private void waitAndCloseTrack() {
 		if (_track != null) {
@@ -469,25 +475,32 @@ public class MainActivity extends Activity {
 				final int TIMEOUT_US = 10000;
 				MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
 				boolean inEos = false;
+				long firstRead = System.currentTimeMillis();
+				int bytesFed = 0;
 				while (!Thread.interrupted()) {
 					if (_seekTo != -1f) {
 						_track.pause();
 						_track.flush();
 						decoder.flush();
 						final int IN_MICROSECONDS = 1000000;
+						Log.d("mp3decoders", "preseek sample time: " + extractor.getSampleTime());
 						extractor.seekTo((int)(_seekTo * IN_MICROSECONDS), MediaExtractor.SEEK_TO_CLOSEST_SYNC);
+						Log.d("mp3decoders", "postseek sample time: " + extractor.getSampleTime());
 						_seekTo = -1f;
 						_track.play();
 					}
 
+					int byteMax = (int) ((System.currentTimeMillis() - firstRead) * getStreamSpeedDecoderFactor());
+					boolean readyForRead = byteMax >= bytesFed;
 					// input buffers will fill up if decoding while paused
-					if (!inEos && _track.getPlayState() != AudioTrack.PLAYSTATE_PAUSED) {
+					if (readyForRead && !inEos && _track.getPlayState() != AudioTrack.PLAYSTATE_PAUSED) {
 						int inIndex = decoder.dequeueInputBuffer(TIMEOUT_US);
 						if (inIndex >= 0) {
 							ByteBuffer buffer = inputBuffers[inIndex];
 							int sampleSize = extractor.readSampleData(buffer, 0);
+							bytesFed += sampleSize;
+							changeState2("bytesFed: " + bytesFed);
 							if (sampleSize < 0) {
-								Log.d("DecodeActivity", "inEOS");
 								decoder.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
 								inEos = true;
 							} else {
@@ -513,7 +526,7 @@ public class MainActivity extends Activity {
 						outputBuffers = decoder.getOutputBuffers();
 					} else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
 						MediaFormat newFormat = decoder.getOutputFormat();
-						changeState("New format " + newFormat);
+						//changeState("New format " + newFormat);
 						_track.setPlaybackRate(newFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE));
 					}
 
@@ -547,6 +560,17 @@ public class MainActivity extends Activity {
 			}
 		}
 	};
+
+	// sleep for 1000 downloads slightly slower than realtime
+	private int getStreamSpeedDecoderFactor() {
+		RadioGroup speedGroup = (RadioGroup) findViewById(R.id.streamSpeed);
+		switch (speedGroup.getCheckedRadioButtonId()) {
+			case R.id.streamRealtime: return 15;
+			case R.id.streamSlow: return 10;
+			case R.id.streamVerySlow: return 5;
+			default: return 15;
+		}
+	}
 
 	private View.OnClickListener playMediaDecoderHandler = new View.OnClickListener() {
 		@Override
@@ -619,6 +643,7 @@ public class MainActivity extends Activity {
 		findViewById(R.id.playVorbis).setOnClickListener(playVorbisHandler);
 		findViewById(R.id.skip1s).setOnClickListener(skip1sHandler);
 		findViewById(R.id.skip6s).setOnClickListener(skip6sHandler);
+		findViewById(R.id.skipPastEnd).setOnClickListener(skipPastEndHandler);
 		findViewById(R.id.pause).setOnClickListener(pauseHandler);
 		_stateText = (TextView) findViewById(R.id.state);
 		_state2Text = (TextView) findViewById(R.id.state2);
