@@ -37,6 +37,8 @@ public class MainActivity extends Activity {
 	private IMediaDecoder _fullDecoder;
 	private StreamSkipper _fullSkipper;
 
+	private Thread _mediaDecoderThread;
+
 	private View.OnClickListener skip1sHandler = new View.OnClickListener() {
 		@Override public void onClick(View view) { _seekTo = 1f; }
 	};
@@ -282,6 +284,7 @@ public class MainActivity extends Activity {
 					out.delete();
 				//noinspection ResultOfMethodCallIgnored
 				out.createNewFile();
+				StreamFeeder.clearDoneFiles();
 				File in = new File(getFilesDir() + "/loop1.mp3");
 
 				byte[] b = new byte[10000];
@@ -305,8 +308,9 @@ public class MainActivity extends Activity {
 					_fullFeeder = null;
 					_fullDecoder.completeStream();
 				}
-			} catch (IOException | InterruptedException e) {
+			} catch (IOException e) {
 				Log.e("mp3decoders", "cannot stream file", e);
+			} catch (InterruptedException ignored) {
 			} finally {
 				try {
 					if (inStream != null)
@@ -435,84 +439,179 @@ public class MainActivity extends Activity {
 		}
 	};
 
+	class MediaState {
+		public MediaExtractor extractor;
+		public MediaFormat format;
+		public int sampleRate;
+		public int numChannels;
+		public MediaCodec decoder;
+		public ByteBuffer[] inputBuffers;
+		public ByteBuffer[] outputBuffers;
+
+		public MediaState(String inputFilename) throws InterruptedException {
+			extractor = createMediaExtractor(inputFilename);
+			if (extractor == null)
+				return;
+
+			format = extractor.getTrackFormat(0);
+			sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE);
+			numChannels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
+
+			decoder = createMediaCodec(format);
+			if (decoder == null)
+				return;
+
+			inputBuffers = decoder.getInputBuffers();
+			outputBuffers = decoder.getOutputBuffers();
+		}
+
+		private MediaExtractor createMediaExtractor(String inputFilename) throws InterruptedException {
+			MediaExtractor extractor = new MediaExtractor();
+			boolean dataSourceSet = false;
+			while (!dataSourceSet) {
+				try {
+					extractor.setDataSource(inputFilename);
+					dataSourceSet = true;
+				} catch (IOException e) {
+					Thread.sleep(100);
+				}
+			}
+			extractor.selectTrack(0);
+			return extractor;
+		}
+
+		private MediaCodec createMediaCodec(MediaFormat format) {
+			MediaCodec decoder;
+
+			try {
+				String mime = format.getString(MediaFormat.KEY_MIME);
+				decoder = MediaCodec.createDecoderByType(mime);
+			} catch (IOException e) {
+				Log.e("mp3decoders", "error creating media decoder", e);
+				changeState(e.getMessage());
+				return null;
+			}
+
+			decoder.configure(format, null, null, 0);
+			decoder.start();
+			return decoder;
+		}
+
+		public AudioTrack getAudioTrack() {
+			return new AudioTrack(AudioManager.STREAM_MUSIC,
+				sampleRate,
+				numChannels == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO,
+				AudioFormat.ENCODING_PCM_16BIT,
+				sampleRate * 2,
+				AudioTrack.MODE_STREAM);
+		}
+
+		public void release() {
+			extractor.release();
+			decoder.stop();
+			decoder.release();
+		}
+
+		private boolean _finished = false;
+		private boolean _recycling = false;
+		private boolean _inEOS = false;
+		private boolean _outEOS = false;
+
+		public void interrupt() { _finished = true; }
+		public void recycle() { _recycling = true; }
+
+		public boolean isFinished() { return _finished; }
+		public boolean isRecycling() { return _recycling; }
+		public boolean needsRecycle() { return _recycling && _outEOS; }
+
+		public void inEOS() {
+			_inEOS = true;
+			if (_outEOS)
+				_finished = true;
+		}
+
+		public void outEOS() {
+			_outEOS = true;
+			if (_inEOS)
+				_finished = true;
+		}
+	}
+
 	private Runnable mediaDecoderRunnable = new Runnable() {
 		@Override
 		public void run() {
+			Thread fakeStreamer = new Thread(_fakeStream, "fakeStreamer");
+			fakeStreamer.start();
+
+			String inputFilename = getFilesDir() + "/streamed.mp3";
+			//String inputFilename = getFilesDir() + "/loop1.mp3";
+			MediaState mediaState = null;
+
 			try {
-				MediaExtractor extractor = new MediaExtractor();
-				extractor.setDataSource(getFilesDir() + "/loop1.mp3");
+				mediaState = new MediaState(inputFilename);
 
-				MediaFormat format = extractor.getTrackFormat(0);
-				String mime = format.getString(MediaFormat.KEY_MIME);
-				int sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE);
-				int numChannels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
-
-				Log.i("mp3decoders", "mime type: " + mime);
-				Log.i("mp3decoders", "sample rate: " + sampleRate);
-				Log.i("mp3decoders", "num channels: " + numChannels);
-
-				MediaCodec decoder = MediaCodec.createDecoderByType(mime);
-				decoder.configure(format, null, null, 0);
-				decoder.start();
-				changeState("setup mediadecoder");;
-
-				ByteBuffer[] inputBuffers = decoder.getInputBuffers();
-				ByteBuffer[] outputBuffers = decoder.getOutputBuffers();
-
-				extractor.selectTrack(0);
-
-				_track = new AudioTrack(AudioManager.STREAM_MUSIC,
-						sampleRate,
-						numChannels == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO,
-						AudioFormat.ENCODING_PCM_16BIT,
-						sampleRate * 2,
-						AudioTrack.MODE_STREAM);
-				_track.setPositionNotificationPeriod(sampleRate);
+				_track = mediaState.getAudioTrack();
+				_track.setPositionNotificationPeriod(mediaState.sampleRate);
 				_track.setPlaybackPositionUpdateListener(_playbackPositionListener);
 				_track.play();
-				changeState("audiotrack setup");
 
-				final int TIMEOUT_US = 10000;
 				MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-				boolean inEos = false;
-				long firstRead = System.currentTimeMillis();
 				int bytesFed = 0;
-				while (!Thread.interrupted()) {
+				int sampleSize = 0;
+				long lastPresentationUs = 0;
+
+				while (!Thread.interrupted() && !mediaState.isFinished()) {
+					if (mediaState.needsRecycle()) {
+						mediaState = new MediaState(inputFilename);
+						mediaState.extractor.seekTo(lastPresentationUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+					}
+
 					if (_seekTo != -1f) {
 						_track.pause();
 						_track.flush();
-						decoder.flush();
-						final int IN_MICROSECONDS = 1000000;
-						Log.d("mp3decoders", "preseek sample time: " + extractor.getSampleTime());
-						extractor.seekTo((int)(_seekTo * IN_MICROSECONDS), MediaExtractor.SEEK_TO_CLOSEST_SYNC);
-						Log.d("mp3decoders", "postseek sample time: " + extractor.getSampleTime());
+						mediaState.decoder.flush();
+						final int IN_MICROSECONDS = 10000;
+						Log.d("mp3decoders", "preseek sample time: " + mediaState.extractor.getSampleTime());
+						mediaState.extractor.seekTo((int)(_seekTo * IN_MICROSECONDS), MediaExtractor.SEEK_TO_CLOSEST_SYNC);
+						Log.d("mp3decoders", "postseek sample time: " + mediaState.extractor.getSampleTime());
 						_seekTo = -1f;
 						_track.play();
 					}
 
-					int byteMax = (int) ((System.currentTimeMillis() - firstRead) * getStreamSpeedDecoderFactor());
-					boolean readyForRead = byteMax >= bytesFed;
+					final int TIMEOUT_US = 10000;
+					long byteMax = new File(inputFilename).length();
+					long bytesNeeded = bytesFed;
+					boolean readyForRead = byteMax >= bytesNeeded;
+//Log.d("mediadecoder", "reading: " + readyForRead + ", bytemax: " + byteMax + ", bytesfed: " + bytesFed + ", samplesize: " + sampleSize + ", bytesneeded: " + bytesNeeded);
+
 					// input buffers will fill up if decoding while paused
-					if (readyForRead && !inEos && _track.getPlayState() != AudioTrack.PLAYSTATE_PAUSED) {
-						int inIndex = decoder.dequeueInputBuffer(TIMEOUT_US);
+					if (!mediaState.isRecycling() && readyForRead && _track.getPlayState() != AudioTrack.PLAYSTATE_PAUSED) {
+						int inIndex = mediaState.decoder.dequeueInputBuffer(TIMEOUT_US);
 						if (inIndex >= 0) {
-							ByteBuffer buffer = inputBuffers[inIndex];
-							int sampleSize = extractor.readSampleData(buffer, 0);
-							bytesFed += sampleSize;
-							changeState2("bytesFed: " + bytesFed);
-							if (sampleSize < 0) {
-								decoder.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-								inEos = true;
+							ByteBuffer buffer = mediaState.inputBuffers[inIndex];
+							sampleSize = mediaState.extractor.readSampleData(buffer, 0);
+							Log.i("mediadecoder", "sample time : " + mediaState.extractor.getSampleTime());
+
+							if (sampleSize >= 0) {
+								bytesFed += sampleSize;
+								changeState2("bytesFed: " + bytesFed);
+								lastPresentationUs = mediaState.extractor.getSampleTime();
+								mediaState.decoder.queueInputBuffer(inIndex, 0, sampleSize, lastPresentationUs, 0);
+								mediaState.extractor.advance();
+							} else if (StreamFeeder.isFileDone(inputFilename)) {
+								// if file is finished streaming, input is complete
+								mediaState.decoder.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+								mediaState.inEOS();
 							} else {
-								decoder.queueInputBuffer(inIndex, 0, sampleSize, extractor.getSampleTime(), 0);
-								extractor.advance();
+								mediaState.decoder.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+								mediaState.recycle();
 							}
 						}
 					}
 
-					int outIndex = decoder.dequeueOutputBuffer(info, TIMEOUT_US);
+					int outIndex = mediaState.decoder.dequeueOutputBuffer(info, TIMEOUT_US);
 					if (outIndex > 0) {
-						ByteBuffer buf = outputBuffers[outIndex];
+						ByteBuffer buf = mediaState.outputBuffers[outIndex];
 						//_track.write(buf, info.size, AudioTrack.WRITE_BLOCKING);
 
 						final byte[] chunk = new byte[info.size];
@@ -520,30 +619,33 @@ public class MainActivity extends Activity {
 						buf.clear();
 						_track.write(chunk, 0, chunk.length);
 
-						decoder.releaseOutputBuffer(outIndex, false);
+						mediaState.decoder.releaseOutputBuffer(outIndex, false);
 					} else if (outIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
 						changeState("INFO_OUTPUT_BUFFERS_CHANGED");
-						outputBuffers = decoder.getOutputBuffers();
+						mediaState.outputBuffers = mediaState.decoder.getOutputBuffers();
 					} else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-						MediaFormat newFormat = decoder.getOutputFormat();
+						MediaFormat newFormat = mediaState.decoder.getOutputFormat();
 						//changeState("New format " + newFormat);
 						_track.setPlaybackRate(newFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE));
 					}
 
 					if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
 						Log.d("mp3decoders", "outEOS");
-						break;
+						mediaState.outEOS();
 					}
 				}
 
 				changeState("done playing");
-				decoder.stop();
-				decoder.release();
-				extractor.release();
 
-			} catch (IOException e) {
-				e.printStackTrace();
+			} catch (InterruptedException e1) {
+				if (mediaState != null)
+					mediaState.interrupt();
+				Log.e("mediadecoder", "interrupted", e1);
+			} catch (Exception e) {
+				Log.e("mediadecoder", "catchall", e);
 			} finally {
+				if (mediaState != null)
+					mediaState.release();
 
 				if (_track != null) {
 					try {
@@ -557,8 +659,14 @@ public class MainActivity extends Activity {
 					_track = null;
 				}
 
+				fakeStreamer.interrupt();
+				try {
+					fakeStreamer.join();
+				} catch (InterruptedException ignored) { }
 			}
 		}
+
+
 	};
 
 	// sleep for 1000 downloads slightly slower than realtime
@@ -577,7 +685,18 @@ public class MainActivity extends Activity {
 		public void onClick(View view) {
 			if (!requestAudioFocus())
 				return;
-			new Thread(mediaDecoderRunnable, "mediaDecoder").start();
+
+			try {
+				if (_mediaDecoderThread != null) {
+					_mediaDecoderThread.interrupt();
+					_mediaDecoderThread.join();
+				}
+			} catch (InterruptedException e) {
+				Log.e("mp3decoders", "error closing old mediadecoderthread", e);
+			}
+			_mediaDecoderThread = new Thread(mediaDecoderRunnable, "mediaDecoder");
+			_mediaDecoderThread.start();
+
 			Log.i("mp3decoders", "started media decoder thread");
 		}
 	};

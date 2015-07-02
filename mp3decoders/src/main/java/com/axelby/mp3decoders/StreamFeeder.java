@@ -21,6 +21,7 @@ public class StreamFeeder {
 	private static ArrayList<String> _doneFiles = new ArrayList<>(2);
 	public static void doneStreamingFile(String filename) { if (!_doneFiles.contains(filename)) _doneFiles.add(filename); }
 	public static void clearDoneFiles() { _doneFiles.clear(); }
+	public static boolean isFileDone(String filename) { return _doneFiles.contains(filename); }
 	
 	public StreamFeeder(String filename, IMediaDecoder decoder) throws FileNotFoundException {
 		this(filename, decoder, 0);
