@@ -544,7 +544,6 @@ public class MainActivity extends Activity {
 			fakeStreamer.start();
 
 			String inputFilename = getFilesDir() + "/streamed.mp3";
-			//String inputFilename = getFilesDir() + "/loop1.mp3";
 			MediaState mediaState = null;
 
 			try {
@@ -580,9 +579,7 @@ public class MainActivity extends Activity {
 
 					final int TIMEOUT_US = 10000;
 					long byteMax = new File(inputFilename).length();
-					long bytesNeeded = bytesFed;
-					boolean readyForRead = byteMax >= bytesNeeded;
-//Log.d("mediadecoder", "reading: " + readyForRead + ", bytemax: " + byteMax + ", bytesfed: " + bytesFed + ", samplesize: " + sampleSize + ", bytesneeded: " + bytesNeeded);
+					boolean readyForRead = byteMax >= bytesFed;
 
 					// input buffers will fill up if decoding while paused
 					if (!mediaState.isRecycling() && readyForRead && _track.getPlayState() != AudioTrack.PLAYSTATE_PAUSED) {
