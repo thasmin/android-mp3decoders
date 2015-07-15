@@ -66,23 +66,37 @@
         android:id="@+id/pause"
         />
 
-    <Button
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:orientation="horizontal"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Skip to 1s"
-        android:id="@+id/skip1s"/>
+        android:layout_gravity="center_horizontal">
 
-    <Button
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Skip to 6s"
-        android:id="@+id/skip6s"/>
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Skip to:"
+            android:id="@+id/skipText"
+            android:textAppearance="@android:style/TextAppearance.Medium"/>
 
-    <Button
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Skip Past End"
-        android:id="@+id/skipPastEnd"/>
+        <Button
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="1s"
+            android:id="@+id/skip1s"/>
+
+        <Button
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="6s"
+            android:id="@+id/skip6s"/>
+
+        <Button
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Past End"
+            android:id="@+id/skipPastEnd"/>
+    </LinearLayout>
 
     <TextView
         android:layout_width="wrap_content"
