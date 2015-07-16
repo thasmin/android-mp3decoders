@@ -519,6 +519,7 @@ public class MainActivity extends Activity {
 
 		public void interrupt() { _finished = true; }
 		public void recycle() { _recycling = true; }
+		public void forceRecycle() { _recycling = true; _outEOS = true; }
 
 		public boolean isFinished() { return _finished; }
 		public boolean isRecycling() { return _recycling; }
@@ -559,22 +560,47 @@ public class MainActivity extends Activity {
 				int sampleSize = 0;
 				long lastPresentationUs = 0;
 
+				Log.i("mediadecoder", "---");
 				while (!Thread.interrupted() && !mediaState.isFinished()) {
 					if (mediaState.needsRecycle()) {
+						Log.i("mediadecoder", "creating mediastate because of recycle and seeking to " + lastPresentationUs);
 						mediaState = new MediaState(inputFilename);
 						mediaState.extractor.seekTo(lastPresentationUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+
+						// does this need to be inside needsRecycle()?
+						while (mediaState.extractor.getSampleTime() == -1) {
+							// skipped past end?
+							if (StreamFeeder.isFileDone(inputFilename))
+								break;
+							Thread.sleep(100);
+							Log.i("mediadecoder", "creating mediastate because sample time == -1 and seeking to " + lastPresentationUs);
+							mediaState = new MediaState(inputFilename);
+							mediaState.extractor.seekTo(lastPresentationUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+						}
 					}
 
 					if (_seekTo != -1f) {
 						_track.pause();
 						_track.flush();
 						mediaState.decoder.flush();
-						final int IN_MICROSECONDS = 10000;
+
 						Log.d("mp3decoders", "preseek sample time: " + mediaState.extractor.getSampleTime());
-						mediaState.extractor.seekTo((int)(_seekTo * IN_MICROSECONDS), MediaExtractor.SEEK_TO_CLOSEST_SYNC);
+						lastPresentationUs = (int) (_seekTo * 1000000);
+						Log.d("mp3decoders", "seeking to: " + lastPresentationUs);
+						mediaState.extractor.seekTo(lastPresentationUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
 						Log.d("mp3decoders", "postseek sample time: " + mediaState.extractor.getSampleTime());
+
 						_seekTo = -1f;
-						_track.play();
+						if (mediaState.extractor.getSampleTime() > -1) {
+							_track.play();
+						} else if (StreamFeeder.isFileDone(inputFilename)) {
+							// skipped past end
+							break;
+						} else {
+							Thread.sleep(100);
+							mediaState.forceRecycle();
+							continue;
+						}
 					}
 
 					final int TIMEOUT_US = 10000;
@@ -587,21 +613,24 @@ public class MainActivity extends Activity {
 						if (inIndex >= 0) {
 							ByteBuffer buffer = mediaState.inputBuffers[inIndex];
 							sampleSize = mediaState.extractor.readSampleData(buffer, 0);
-							Log.i("mediadecoder", "sample time : " + mediaState.extractor.getSampleTime());
+							//Log.i("mediadecoder", "sample time : " + mediaState.extractor.getSampleTime());
 
 							if (sampleSize >= 0) {
 								bytesFed += sampleSize;
-								changeState2("bytesFed: " + bytesFed);
+								//Log.i("mediadecoder", "bytesFed: " + bytesFed);
 								lastPresentationUs = mediaState.extractor.getSampleTime();
 								mediaState.decoder.queueInputBuffer(inIndex, 0, sampleSize, lastPresentationUs, 0);
 								mediaState.extractor.advance();
-							} else if (StreamFeeder.isFileDone(inputFilename)) {
-								// if file is finished streaming, input is complete
-								mediaState.decoder.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-								mediaState.inEOS();
 							} else {
 								mediaState.decoder.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-								mediaState.recycle();
+								// if file is finished streaming, input is complete
+								if (StreamFeeder.isFileDone(inputFilename)) {
+									Log.i("mediadecoder", "in eos");
+									mediaState.inEOS();
+								} else {
+									Log.i("mediadecoder", "recycling");
+									mediaState.recycle();
+								}
 							}
 						}
 					}
@@ -627,7 +656,7 @@ public class MainActivity extends Activity {
 					}
 
 					if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-						Log.d("mp3decoders", "outEOS");
+						Log.d("mediadecoder", "outEOS");
 						mediaState.outEOS();
 					}
 				}
@@ -660,6 +689,8 @@ public class MainActivity extends Activity {
 				try {
 					fakeStreamer.join();
 				} catch (InterruptedException ignored) { }
+				//noinspection ResultOfMethodCallIgnored
+				new File(inputFilename).delete();
 			}
 		}
 
