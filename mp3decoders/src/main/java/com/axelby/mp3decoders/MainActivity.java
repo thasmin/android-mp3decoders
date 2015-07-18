@@ -447,8 +447,10 @@ public class MainActivity extends Activity {
 		public MediaCodec decoder;
 		public ByteBuffer[] inputBuffers;
 		public ByteBuffer[] outputBuffers;
+		public boolean completeFileLoaded;
 
 		public MediaState(String inputFilename) throws InterruptedException {
+			completeFileLoaded = StreamFeeder.isFileDone(inputFilename);
 			extractor = createMediaExtractor(inputFilename);
 			if (extractor == null)
 				return;
@@ -512,6 +514,8 @@ public class MainActivity extends Activity {
 			decoder.release();
 		}
 
+		public boolean wasCompleteFileLoaded() { return completeFileLoaded; }
+
 		private boolean _finished = false;
 		private boolean _recycling = false;
 		private boolean _inEOS = false;
@@ -522,8 +526,8 @@ public class MainActivity extends Activity {
 		public void forceRecycle() { _recycling = true; _outEOS = true; }
 
 		public boolean isFinished() { return _finished; }
-		public boolean isRecycling() { return _recycling; }
-		public boolean needsRecycle() { return _recycling && _outEOS; }
+		public boolean shouldRecycle() { return _recycling && _outEOS; }
+		public boolean canRead() { return !_inEOS && !_recycling; }
 
 		public void inEOS() {
 			_inEOS = true;
@@ -562,7 +566,7 @@ public class MainActivity extends Activity {
 
 				Log.i("mediadecoder", "---");
 				while (!Thread.interrupted() && !mediaState.isFinished()) {
-					if (mediaState.needsRecycle()) {
+					if (mediaState.shouldRecycle()) {
 						Log.i("mediadecoder", "creating mediastate because of recycle and seeking to " + lastPresentationUs);
 						mediaState = new MediaState(inputFilename);
 						mediaState.extractor.seekTo(lastPresentationUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
@@ -570,10 +574,10 @@ public class MainActivity extends Activity {
 						// does this need to be inside needsRecycle()?
 						while (mediaState.extractor.getSampleTime() == -1) {
 							// skipped past end?
-							if (StreamFeeder.isFileDone(inputFilename))
+							if (mediaState.wasCompleteFileLoaded())
 								break;
 							Thread.sleep(100);
-							Log.i("mediadecoder", "creating mediastate because sample time == -1 and seeking to " + lastPresentationUs);
+							//Log.i("mediadecoder", "creating mediastate because sample time == -1 and seeking to " + lastPresentationUs);
 							mediaState = new MediaState(inputFilename);
 							mediaState.extractor.seekTo(lastPresentationUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
 						}
@@ -593,7 +597,7 @@ public class MainActivity extends Activity {
 						_seekTo = -1f;
 						if (mediaState.extractor.getSampleTime() > -1) {
 							_track.play();
-						} else if (StreamFeeder.isFileDone(inputFilename)) {
+						} else if (mediaState.wasCompleteFileLoaded()) {
 							// skipped past end
 							break;
 						} else {
@@ -605,59 +609,61 @@ public class MainActivity extends Activity {
 
 					final int TIMEOUT_US = 10000;
 					long byteMax = new File(inputFilename).length();
-					boolean readyForRead = byteMax >= bytesFed;
+					boolean readyForRead = mediaState.canRead() && byteMax >= bytesFed;
 
 					// input buffers will fill up if decoding while paused
-					if (!mediaState.isRecycling() && readyForRead && _track.getPlayState() != AudioTrack.PLAYSTATE_PAUSED) {
+					if (readyForRead) {
 						int inIndex = mediaState.decoder.dequeueInputBuffer(TIMEOUT_US);
 						if (inIndex >= 0) {
 							ByteBuffer buffer = mediaState.inputBuffers[inIndex];
 							sampleSize = mediaState.extractor.readSampleData(buffer, 0);
-							//Log.i("mediadecoder", "sample time : " + mediaState.extractor.getSampleTime());
 
 							if (sampleSize >= 0) {
 								bytesFed += sampleSize;
-								//Log.i("mediadecoder", "bytesFed: " + bytesFed);
 								lastPresentationUs = mediaState.extractor.getSampleTime();
+								//Log.i("mediadecoder", "  input presentation time: " + lastPresentationUs);
 								mediaState.decoder.queueInputBuffer(inIndex, 0, sampleSize, lastPresentationUs, 0);
 								mediaState.extractor.advance();
 							} else {
 								mediaState.decoder.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
 								// if file is finished streaming, input is complete
-								if (StreamFeeder.isFileDone(inputFilename)) {
-									Log.i("mediadecoder", "in eos");
+								if (mediaState.wasCompleteFileLoaded()) {
+									//Log.i("mediadecoder", "in eos");
 									mediaState.inEOS();
 								} else {
-									Log.i("mediadecoder", "recycling");
+									//Log.i("mediadecoder", "recycling");
 									mediaState.recycle();
 								}
 							}
 						}
 					}
 
-					int outIndex = mediaState.decoder.dequeueOutputBuffer(info, TIMEOUT_US);
-					if (outIndex > 0) {
-						ByteBuffer buf = mediaState.outputBuffers[outIndex];
-						//_track.write(buf, info.size, AudioTrack.WRITE_BLOCKING);
+					if (_track.getPlayState() != AudioTrack.PLAYSTATE_PAUSED) {
+						int outIndex = mediaState.decoder.dequeueOutputBuffer(info, TIMEOUT_US);
+						if (outIndex > 0) {
+							ByteBuffer buf = mediaState.outputBuffers[outIndex];
+							//Log.i("mediadecoder", "  output presentation time " + info.presentationTimeUs);
+							//_track.write(buf, info.size, AudioTrack.WRITE_BLOCKING);
 
-						final byte[] chunk = new byte[info.size];
-						buf.get(chunk);
-						buf.clear();
-						_track.write(chunk, 0, chunk.length);
+							final byte[] chunk = new byte[info.size];
+							buf.get(chunk);
+							buf.clear();
+							_track.write(chunk, 0, chunk.length);
 
-						mediaState.decoder.releaseOutputBuffer(outIndex, false);
-					} else if (outIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-						changeState("INFO_OUTPUT_BUFFERS_CHANGED");
-						mediaState.outputBuffers = mediaState.decoder.getOutputBuffers();
-					} else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-						MediaFormat newFormat = mediaState.decoder.getOutputFormat();
-						//changeState("New format " + newFormat);
-						_track.setPlaybackRate(newFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE));
-					}
+							mediaState.decoder.releaseOutputBuffer(outIndex, false);
+						} else if (outIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
+							changeState("INFO_OUTPUT_BUFFERS_CHANGED");
+							mediaState.outputBuffers = mediaState.decoder.getOutputBuffers();
+						} else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+							MediaFormat newFormat = mediaState.decoder.getOutputFormat();
+							//changeState("New format " + newFormat);
+							_track.setPlaybackRate(newFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE));
+						}
 
-					if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-						Log.d("mediadecoder", "outEOS");
-						mediaState.outEOS();
+						if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+							Log.d("mediadecoder", "outEOS");
+							mediaState.outEOS();
+						}
 					}
 				}
 
